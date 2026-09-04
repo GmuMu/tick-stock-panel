@@ -191,6 +191,25 @@ class MiningRunStore:
             manifest = self._required_manifest(safe_run_id)
             return self._transition_locked(manifest, status, error=error)
 
+    def transition_status_with_event(
+        self,
+        run_id: str,
+        status: MiningRunStatus,
+        event_type: str,
+        payload: Mapping[str, Any] | None = None,
+        *,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        """Atomically persist a state transition and its corresponding event."""
+        if status not in RUN_STATUSES:
+            raise MiningRunValidationError(f"unsupported mining run status: {status!r}")
+        safe_run_id = self._validate_run_id(run_id)
+        with _STORE_LOCK:
+            manifest = self._required_manifest(safe_run_id)
+            manifest = self._transition_locked(manifest, status, error=error)
+            self.append_event(safe_run_id, event_type, payload)
+            return manifest
+
     def write_summary(self, run_id: str, summary: Mapping[str, Any]) -> dict[str, Any]:
         """Atomically replace a run's scalar or compact aggregate summary."""
         if not isinstance(summary, Mapping):
@@ -277,22 +296,35 @@ class MiningRunStore:
 
         with _STORE_LOCK:
             self._required_manifest(safe_run_id)
-            path = self._run_dir(safe_run_id) / "events.jsonl"
-            events = self._read_events_path(path)
-            next_id = max((event["id"] for event in events), default=0) + 1
-            event = {
-                "id": next_id,
-                "timestamp": _now_iso(),
-                "type": clean_event_type,
-                "payload": clean_payload,
-            }
-            events.append(event)
-            events = events[-MAX_EVENTS:]
-            text = "".join(
-                json.dumps(item, ensure_ascii=False, allow_nan=False, separators=(",", ":")) + "\n"
-                for item in events
+            return self._append_event_locked(
+                safe_run_id,
+                clean_event_type,
+                clean_payload,
             )
-            _atomic_write_text(path, text)
+
+    def _append_event_locked(
+        self,
+        run_id: str,
+        event_type: str,
+        payload: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Append an already validated event while holding ``_STORE_LOCK``."""
+        path = self._run_dir(run_id) / "events.jsonl"
+        events = self._read_events_path(path)
+        next_id = max((event["id"] for event in events), default=0) + 1
+        event = {
+            "id": next_id,
+            "timestamp": _now_iso(),
+            "type": event_type,
+            "payload": dict(payload or {}),
+        }
+        events.append(event)
+        events = events[-MAX_EVENTS:]
+        text = "".join(
+            json.dumps(item, ensure_ascii=False, allow_nan=False, separators=(",", ":")) + "\n"
+            for item in events
+        )
+        _atomic_write_text(path, text)
         return event
 
     def read_events(self, run_id: str, *, after_id: int = 0) -> list[dict[str, Any]]:
