@@ -234,6 +234,13 @@ class QuoteService:
         self._symbol_count: int = 0
         self._index_symbol_count: int = 0
         self._etf_symbol_count: int = 0
+        self._realtime_route: dict[str, object | None] = {
+            "dataset": "realtime",
+            "requested_provider": "tickflow",
+            "effective_provider": "tickflow",
+            "fallback": False,
+            "fallback_reason": None,
+        }
         self._index_quotes_cache: pl.DataFrame | None = None
         self._intraday_signal_evaluator = IntradaySignalEvaluator()
         self._intraday_signal_bucket: dict[str, str] = {}
@@ -559,6 +566,7 @@ class QuoteService:
             "final_sync_done": final_done,
             "final_sync_failed": final_failed,
             "last_fetch_ms": round(self._fetched_at, 0) if self._fetched_at else None,
+            "realtime_route": dict(self._realtime_route),
         }
 
     def refresh(self) -> dict:
@@ -610,36 +618,39 @@ class QuoteService:
 
     def _fetch_full_market_quotes(self) -> None:
         """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。"""
+        from app.data_providers import custom as custom_sources
         from app.services import preferences
 
         provider_name = preferences.get_realtime_data_provider()
-        if provider_name != "tickflow":
-            from app.data_providers import custom as custom_sources
-            if custom_sources.provider_has_dataset(provider_name, "realtime"):
-                try:
-                    t0 = time.perf_counter()
-                    now_ts = time.perf_counter()
-                    provider = custom_sources.get_provider(provider_name)
-                    records = provider.get_realtime()
-                    # 指数补充: A 股快照通常不含指数。插件可选实现
-                    # get_realtime_indices(symbols) 用独立端点补拉 (如 fuyao 指数快照);
-                    # 未实现的源指数缓存为空, 由日K兜底接管。
-                    replace_index_cache = True
-                    fetch_indices = getattr(provider, "get_realtime_indices", None)
-                    if callable(fetch_indices):
-                        wanted = sorted(set(CORE_INDEX_SYMBOLS) | self._collect_monitor_index_symbols())
-                        try:
-                            fetched_indices = fetch_indices(wanted)
-                            if fetched_indices is None:
-                                replace_index_cache = False
-                            else:
-                                records = records + fetched_indices
-                        except Exception as e:  # noqa: BLE001
-                            logger.warning("自定义源指数行情拉取失败: %s", e)
+        route = custom_sources.resolve_route(provider_name, "realtime")
+        if route.provider is not None:
+            try:
+                t0 = time.perf_counter()
+                now_ts = time.perf_counter()
+                provider = route.provider
+                records = provider.get_realtime()
+                # 指数补充: A 股快照通常不含指数。插件可选实现
+                # get_realtime_indices(symbols) 用独立端点补拉 (如 fuyao 指数快照);
+                # 未实现的源指数缓存为空, 由日K兜底接管。
+                replace_index_cache = True
+                fetch_indices = getattr(provider, "get_realtime_indices", None)
+                if callable(fetch_indices):
+                    wanted = sorted(set(CORE_INDEX_SYMBOLS) | self._collect_monitor_index_symbols())
+                    try:
+                        fetched_indices = fetch_indices(wanted)
+                        if fetched_indices is None:
                             replace_index_cache = False
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("自定义实时行情拉取失败: %s", e)
-                    return
+                        else:
+                            records = records + fetched_indices
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("自定义源指数行情拉取失败: %s", e)
+                        replace_index_cache = False
+            except Exception as e:  # noqa: BLE001
+                route = route.with_fallback("provider_call_failed", error=str(e))
+                logger.warning("自定义实时行情拉取失败, falling back to TickFlow: %s", e)
+            else:
+                with self._lock:
+                    self._realtime_route = route.provenance()
                 self._process_full_market_records(
                     records,
                     t0=t0,
@@ -647,7 +658,12 @@ class QuoteService:
                     replace_index_cache=replace_index_cache,
                 )
                 return
-            # 自定义源未配置 realtime → 回退 TickFlow
+
+        with self._lock:
+            self._realtime_route = route.provenance()
+        if route.fallback and route.error is not None:
+            logger.warning("自定义实时源 %s 解析失败, falling back to TickFlow: %s",
+                           provider_name, route.error)
 
         from app.tickflow.client import get_paid_realtime_client
 
@@ -741,7 +757,6 @@ class QuoteService:
         replace_index_cache: bool = True,
     ) -> None:
         """把全市场 records 写盘并增量计算 enriched。"""
-        from app.services import preferences
         all_index_symbols = set(self._repo.get_index_symbol_set()) if self._repo else set()
         core_index_symbols = set(CORE_INDEX_SYMBOLS)
         all_index_symbols.update(core_index_symbols)

@@ -13,6 +13,7 @@ import yaml
 
 from app import secrets_store
 from app.config import settings
+from app.data_providers.base import ProviderRoute
 from app.data_providers.custom.config import (
     DEFAULT_TIMEOUT,
     MAX_TIMEOUT,
@@ -325,6 +326,59 @@ def provider_has_dataset(name: str, dataset: str) -> bool:
     if provider is None:
         return False
     return dataset in provider.config.datasets
+
+
+def resolve_route(
+    name: str | None,
+    dataset: str,
+    *,
+    has_dataset=None,
+    provider_getter=None,
+) -> ProviderRoute:
+    """Resolve one provider preference through the loaded provider registry.
+
+    TickFlow is the canonical fallback. Missing datasets and broken provider
+    registries are represented explicitly instead of being silently mixed into
+    a successful custom-source result. Callers may refine the decision with
+    ``ProviderRoute.with_fallback`` after a provider request or contract check
+    fails.
+    """
+    requested = str(name or "tickflow").strip().lower() or "tickflow"
+    if requested == "tickflow":
+        return ProviderRoute(
+            dataset=dataset,
+            requested_provider=requested,
+            effective_provider="tickflow",
+        )
+
+    has_dataset = has_dataset or provider_has_dataset
+    provider_getter = provider_getter or get_provider
+    try:
+        if not has_dataset(requested, dataset):
+            return ProviderRoute(
+                dataset=dataset,
+                requested_provider=requested,
+                effective_provider="tickflow",
+                fallback=True,
+                fallback_reason="dataset_unavailable",
+            )
+        provider = provider_getter(requested)
+    except Exception as exc:  # noqa: BLE001
+        return ProviderRoute(
+            dataset=dataset,
+            requested_provider=requested,
+            effective_provider="tickflow",
+            fallback=True,
+            fallback_reason="provider_resolution_failed",
+            error=str(exc),
+        )
+
+    return ProviderRoute(
+        dataset=dataset,
+        requested_provider=requested,
+        effective_provider=requested,
+        provider=provider,
+    )
 
 
 def get_config_dict(name: str) -> dict | None:

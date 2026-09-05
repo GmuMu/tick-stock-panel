@@ -87,6 +87,7 @@ class _RefreshState:
     last_requests: int = 0                  # 上轮请求数 (增量恒 1, 修复=分块数+重试)
     last_mode: str | None = None            # 上轮模式: "increment" / "full"
     last_error: str | None = None
+    route_provenance: dict[str, object | None] = field(default_factory=dict)
     next_round_at: float | None = None      # epoch 秒
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -156,7 +157,7 @@ class MinuteRefreshService:
         except Exception:  # noqa: BLE001 — 偏好文件异常按 TickFlow 处理
             return "tickflow"
 
-    def _resolve_custom(self) -> tuple[object | None, str]:
+    def _resolve_custom(self, *, record_provenance: bool = True) -> tuple[object | None, str]:
         """解析自定义源。返回 (provider_or_None, effective_name):
 
         - 偏好 tickflow / 源未声明 full_minute 数据集 / 解析异常 → (None, "tickflow")
@@ -166,15 +167,43 @@ class MinuteRefreshService:
         from app.services import kline_sync
 
         name = self.active_provider()
-        if name == "tickflow":
-            return (None, "tickflow")
         provider, use_tickflow, err = kline_sync._resolve_full_minute_provider(name)
+        route_provenance: dict[str, object | None]
+        if name == "tickflow":
+            route_provenance = {
+                "dataset": "full_minute",
+                "requested_provider": "tickflow",
+                "effective_provider": "tickflow",
+                "fallback": False,
+                "fallback_reason": None,
+            }
+            if record_provenance:
+                self._state.route_provenance = route_provenance
+            return (None, "tickflow")
         if use_tickflow:
+            route_provenance = {
+                "dataset": "full_minute",
+                "requested_provider": name,
+                "effective_provider": "tickflow",
+                "fallback": True,
+                "fallback_reason": "provider_resolution_failed" if err else "dataset_unavailable",
+            }
+            if record_provenance:
+                self._state.route_provenance = route_provenance
             if err is not None:
                 logger.warning(
                     "full_minute provider %s 解析失败, 本轮降级 TickFlow: %s", name, err,
                 )
             return (None, "tickflow")
+        route_provenance = {
+            "dataset": "full_minute",
+            "requested_provider": name,
+            "effective_provider": name,
+            "fallback": False,
+            "fallback_reason": None,
+        }
+        if record_provenance:
+            self._state.route_provenance = route_provenance
         return (provider, name)
 
     def _custom_supports_increment(self, provider: object) -> bool:
@@ -183,7 +212,7 @@ class MinuteRefreshService:
 
     def repair_only(self) -> bool:
         """当前生效源只能全天修复轮 (无廉价增量端点) — 节奏下限抬到 60s。"""
-        provider, name = self._resolve_custom()
+        provider, _name = self._resolve_custom(record_provenance=False)
         return provider is not None and not self._custom_supports_increment(provider)
 
     def _effective_interval(self) -> int:
@@ -292,7 +321,9 @@ class MinuteRefreshService:
                 # fetch 计时只覆盖网络取数; full 分支的 universe 维表读取不计入
                 fetch_started = time.perf_counter()
                 if custom is not None:
-                    latest = kline_sync.fetch_intraday_custom_latest(custom, provider_name)
+                    latest = kline_sync.fetch_intraday_custom_latest(
+                        custom, provider_name, provenance_out=self._state.route_provenance,
+                    )
                     df, requests = latest if latest is not None else (pl.DataFrame(), 0)
                 else:
                     df, requests = kline_sync.fetch_intraday_universe_increment()
@@ -310,10 +341,23 @@ class MinuteRefreshService:
                 if custom is not None:
                     df, requests = kline_sync.fetch_intraday_custom_batch(
                         custom, provider_name, symbols,
+                        provenance_out=self._state.route_provenance,
                     )
                 else:
                     capset = getattr(self._app_state, "capabilities", None) if self._app_state else None
                     df, requests = kline_sync.fetch_intraday_full_market_burst(symbols, capset)
+            if custom is not None and self._state.route_provenance.get("fallback"):
+                # Provider call/contract failures use the same immediate fallback
+                # path as minute K; a valid empty frame remains a successful call.
+                capset = getattr(self._app_state, "capabilities", None) if self._app_state else None
+                if mode == "increment":
+                    fallback_df, fallback_requests = kline_sync.fetch_intraday_universe_increment()
+                else:
+                    fallback_df, fallback_requests = kline_sync.fetch_intraday_full_market_burst(
+                        symbols, capset,
+                    )
+                df = fallback_df
+                requests += fallback_requests
             fetch_ms = (time.perf_counter() - fetch_started) * 1000
             self._state.last_requests = requests
             if df.is_empty():
@@ -387,7 +431,8 @@ class MinuteRefreshService:
             "running": running,
             "healthy": self.is_healthy(),
             "provider": self.active_provider(),
-            "provider_effective": self._resolve_custom()[1],
+            "provider_effective": self._resolve_custom(record_provenance=False)[1],
+            "route_provenance": dict(self._state.route_provenance),
             "repair_only": self.repair_only(),
             "interval_seconds": preferences.get_minute_refresh_interval(),
             "capability_ok": self.capability_ok(),

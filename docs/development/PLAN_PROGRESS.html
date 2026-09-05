@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A股智能策略交易平台 · Development Plan V1.0</title>
+  <style>
+    :root {
+      --ink: #18251f;
+      --muted: #63736b;
+      --paper: #f5f7f2;
+      --card: rgba(255, 255, 255, .86);
+      --line: #dce5dd;
+      --green: #176b4d;
+      --green-soft: #dff1e7;
+      --amber: #a05a13;
+      --amber-soft: #fff0d8;
+      --red: #a33f3f;
+      --red-soft: #f8e1df;
+      --blue: #2e608c;
+      --blue-soft: #e0edf8;
+      --shadow: 0 18px 50px rgba(28, 49, 39, .09);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 10% 0%, rgba(183, 220, 195, .5), transparent 32rem),
+        radial-gradient(circle at 100% 15%, rgba(245, 211, 163, .34), transparent 28rem),
+        linear-gradient(135deg, #f5f7f2 0%, #edf3ee 55%, #f8f5ed 100%);
+      font-family: Georgia, "Noto Serif SC", "Microsoft YaHei", serif;
+      line-height: 1.55;
+    }
+
+    .shell { max-width: 1380px; margin: 0 auto; padding: 34px 24px 64px; }
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: 42px 44px 38px;
+      border: 1px solid rgba(23, 107, 77, .18);
+      border-radius: 28px;
+      background: linear-gradient(120deg, rgba(255,255,255,.9), rgba(232,244,235,.84));
+      box-shadow: var(--shadow);
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      width: 280px;
+      height: 280px;
+      right: -80px;
+      top: -120px;
+      border: 1px solid rgba(23, 107, 77, .16);
+      border-radius: 50%;
+      box-shadow: 0 0 0 24px rgba(23, 107, 77, .04), 0 0 0 48px rgba(23, 107, 77, .03);
+    }
+    .eyebrow { margin: 0 0 10px; color: var(--green); font: 700 12px/1.2 "Microsoft YaHei", sans-serif; letter-spacing: .16em; text-transform: uppercase; }
+    h1 { max-width: 800px; margin: 0; font-size: clamp(30px, 4vw, 54px); line-height: 1.04; letter-spacing: -.04em; }
+    .subtitle { max-width: 760px; margin: 18px 0 0; color: #486157; font-size: 16px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 24px; color: var(--muted); font: 12px/1.4 "Microsoft YaHei", sans-serif; }
+    .meta strong { color: var(--ink); }
+
+    .overview { display: grid; grid-template-columns: 1.1fr 2fr; gap: 18px; margin: 22px 0; }
+    .progress-card, .stat-card, .controls, .phase { border: 1px solid var(--line); border-radius: 20px; background: var(--card); box-shadow: 0 10px 28px rgba(28, 49, 39, .045); }
+    .progress-card { display: flex; align-items: center; gap: 22px; padding: 22px; }
+    .ring { --progress: 6.2%; display: grid; width: 112px; height: 112px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: conic-gradient(var(--green) var(--progress), #e2ebe4 0); }
+    .ring::before { content: ""; grid-area: 1 / 1; width: 84px; height: 84px; border-radius: 50%; background: #f9fcf8; }
+    .ring span { z-index: 1; grid-area: 1 / 1; color: var(--green); font: 700 23px/1 "Microsoft YaHei", sans-serif; }
+    .progress-card h2 { margin: 0 0 5px; font-size: 21px; }
+    .progress-card p { margin: 0; color: var(--muted); font: 13px/1.5 "Microsoft YaHei", sans-serif; }
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .stat-card { padding: 18px 16px; }
+    .stat-card .num { display: block; font-size: 30px; line-height: 1; }
+    .stat-card .label { display: block; margin-top: 7px; color: var(--muted); font: 12px "Microsoft YaHei", sans-serif; }
+    .stat-card.done .num { color: var(--green); }
+    .stat-card.partial .num { color: var(--amber); }
+    .stat-card.gap .num { color: var(--blue); }
+    .stat-card.blocked .num { color: var(--red); }
+
+    .controls { position: sticky; top: 12px; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 22px 0; padding: 12px; backdrop-filter: blur(14px); }
+    .controls label { color: var(--muted); font: 12px "Microsoft YaHei", sans-serif; }
+    input, select, button { border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); font: 13px "Microsoft YaHei", sans-serif; }
+    input { min-width: 230px; padding: 9px 11px; }
+    select, button { padding: 9px 11px; cursor: pointer; }
+    button { transition: .18s ease; }
+    button:hover, button.active { border-color: var(--green); color: var(--green); background: var(--green-soft); }
+    .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+
+    .phase { overflow: hidden; margin: 16px 0; }
+    .phase-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; padding: 22px 24px 18px; border-bottom: 1px solid var(--line); background: linear-gradient(100deg, rgba(223,241,231,.58), rgba(255,255,255,.4)); }
+    .phase-head h2 { margin: 0; font-size: 23px; letter-spacing: -.02em; }
+    .phase-head p { margin: 0; color: var(--muted); font: 12px "Microsoft YaHei", sans-serif; }
+    .task-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 14px; }
+    .task { padding: 17px 18px; border: 1px solid var(--line); border-radius: 15px; background: rgba(255,255,255,.72); }
+    .task[data-status="done"] { border-color: rgba(23,107,77,.3); background: linear-gradient(145deg, #f5fcf6, #edf8f0); }
+    .task[data-status="blocked"] { border-color: rgba(163,63,63,.25); background: linear-gradient(145deg, #fffafa, #fff3f2); }
+    .task-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .task h3 { margin: 0; font-size: 16px; line-height: 1.3; }
+    .task h3 code { color: var(--green); font: 700 11px/1 "Microsoft YaHei", sans-serif; letter-spacing: .04em; }
+    .badge { flex: 0 0 auto; padding: 4px 8px; border-radius: 999px; font: 700 11px "Microsoft YaHei", sans-serif; }
+    .badge.done { color: var(--green); background: var(--green-soft); }
+    .badge.partial { color: var(--amber); background: var(--amber-soft); }
+    .badge.gap { color: var(--blue); background: var(--blue-soft); }
+    .badge.blocked { color: var(--red); background: var(--red-soft); }
+    .focus { margin: 10px 0 12px; color: #43534c; font-size: 13px; }
+    .detail { display: grid; grid-template-columns: 68px 1fr; gap: 4px 10px; margin: 0; font: 12px/1.45 "Microsoft YaHei", sans-serif; }
+    .detail dt { color: var(--muted); }
+    .detail dd { margin: 0; overflow-wrap: anywhere; }
+    code { font-family: "Cascadia Code", Consolas, monospace; font-size: .92em; }
+    .footer { margin-top: 24px; padding: 18px 20px; border-radius: 16px; color: #4d6157; background: rgba(255,255,255,.62); font: 12px/1.7 "Microsoft YaHei", sans-serif; }
+    .empty { display: none; padding: 36px; color: var(--muted); text-align: center; font: 14px "Microsoft YaHei", sans-serif; }
+
+    @media (max-width: 900px) {
+      .overview { grid-template-columns: 1fr; }
+      .task-grid { grid-template-columns: 1fr; }
+      .legend { width: 100%; margin-left: 0; }
+    }
+    @media (max-width: 560px) {
+      .shell { padding: 14px 10px 34px; }
+      .hero { padding: 28px 22px; border-radius: 20px; }
+      .progress-card { align-items: flex-start; flex-direction: column; }
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      .controls { position: static; }
+      input { width: 100%; min-width: 0; }
+      .phase-head { display: block; padding: 18px; }
+      .phase-head p { margin-top: 6px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <p class="eyebrow">Tick Stock Panel · Execution Board</p>
+      <h1>A股智能策略交易平台<br>Development Plan V1.0</h1>
+      <p class="subtitle">一张持续更新的开发地图：每个任务都绑定真实代码入口、当前状态、前置依赖和下一步动作。</p>
+      <div class="meta">
+      <span>校准日期：<strong>2026-09-04</strong></span>
+        <span>当前分支：<strong>feat/0101-canonical-contracts</strong></span>
+        <span>基线：<strong>25e5680</strong></span>
+        <span>运行数据：<strong>data/ 不进入 Git</strong></span>
+      </div>
+    </header>
+
+    <section class="overview" aria-label="项目进度摘要">
+      <div class="progress-card">
+        <div class="ring"><span id="percent">0%</span></div>
+        <div>
+          <h2 id="summary-title">正在读取任务进度</h2>
+          <p id="summary-text">完成状态以当前仓库代码、测试和任务记录为准。</p>
+        </div>
+      </div>
+      <div class="stats">
+        <div class="stat-card done"><span class="num" id="done-count">0</span><span class="label">已完成</span></div>
+        <div class="stat-card partial"><span class="num" id="partial-count">0</span><span class="label">部分完成</span></div>
+        <div class="stat-card gap"><span class="num" id="gap-count">0</span><span class="label">待开发</span></div>
+        <div class="stat-card blocked"><span class="num" id="blocked-count">0</span><span class="label">被阻塞</span></div>
+      </div>
+    </section>
+
+    <section class="controls" aria-label="任务筛选">
+      <label for="search">查找</label>
+      <input id="search" type="search" placeholder="输入 Task、关键词或代码路径">
+      <label for="phase-filter">Phase</label>
+      <select id="phase-filter"><option value="all">全部 Phase</option></select>
+      <div class="legend">
+        <button type="button" data-filter="all" class="active">全部</button>
+        <button type="button" data-filter="done">已完成</button>
+        <button type="button" data-filter="partial">部分完成</button>
+        <button type="button" data-filter="gap">待开发</button>
+        <button type="button" data-filter="blocked">被阻塞</button>
+      </div>
+    </section>
+
+    <div id="phases"></div>
+    <div id="empty" class="empty">没有匹配的任务。可以换一个关键词或筛选条件。</div>
+
+    <footer class="footer">
+      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。下次开发优先从 <code>TASK-0104</code> 开始。
+    </footer>
+  </main>
+
+  <script>
+    const tasks = [
+      ["Phase 0", "基线与校准", "TASK-0001", "Baseline Freeze", "done", "冻结仓库、环境、运行数据边界和基线标签。", "docs/audit/BASELINE_FREEZE.md", "已完成，保持基线不变。", "chore/0001-freeze-baseline"],
+      ["Phase 0", "基线与校准", "TASK-0002", "Reachability / Extension Audit", "done", "审计启动链、扩展点、Provider、Store、策略、回测和监控真实调用链。", "docs/audit/CURRENT_CODE_AUDIT_TSP.md", "按 action items 排序。", "audit/0002-reachability"],
+      ["Phase 0", "基线与校准", "TASK-0003", "Baseline Test Harness", "done", "建立 Provider、指标、策略、回测、监控和 API 的最小离线回归入口。", "backend/tests/test_baseline_harness.py", "130 个定向回归通过。", "test/0003-baseline-harness"],
+      ["Phase 0", "基线与校准", "TASK-0004", "GAP Matrix 与 Plan 校准", "done", "把计划任务映射到当前真实代码入口，标出 PARTIAL、GAP 和 BLOCKED。", "docs/development/GAP_MATRIX_V1.0.md", "TASK-0101 已完成，进入 TASK-0102。", "docs/0004-gap-calibration"],
+
+      ["Phase 1", "Canonical Contract 与 Capability Router", "TASK-0101", "Canonical Symbol / Date / Unit Contract", "done", "统一股票代码、交易日期、时间戳、百分比、价格、成交量和空值口径。", "backend/app/data_providers/schemas.py; normalizer.py; tests/test_canonical_contract.py", "已完成：canonical 转换函数、CanonicalQuoteMeta 和 Provider 边界测试已落地。", "feat/0101-canonical-contracts"],
+      ["Phase 1", "Canonical Contract 与 Capability Router", "TASK-0102", "Data Capability Matrix", "done", "统一 daily、minute、realtime、financial、corporate action、sector、depth5 能力状态。", "backend/app/data_providers/capabilities.py; settings/capability-matrix; frontend/src/components/Layout.tsx", "已完成：DataCapability/CapabilityMatrix、provider/source/health/priority/status 契约与前端状态消费已落地。", "feat/0102-capability-matrix"],
+      ["Phase 1", "Canonical Contract 与 Capability Router", "TASK-0103", "Capability Router", "done", "按 capability 选择 primary/fallback，业务层不直接依赖供应商 SDK。", "base.py::ProviderRoute; custom/loader.py::resolve_route; kline_sync.py; minute_refresh.py; quote_service.py; tests/test_capability_router.py", "已完成：daily、adj_factor、minute、full_minute、realtime 统一 fallback provenance；237 个受影响测试通过。", "feat/0101-canonical-contracts"],
+      ["Phase 1", "Canonical Contract 与 Capability Router", "TASK-0104", "DataQuality 与 MarketSession", "gap", "为数据质量、覆盖范围、时段和 stale 状态建立统一结果对象。", "market_time.py（已有时段工具，缺统一对象）", "依赖 0101/0103，新增 fail-closed 数据质量边界。", "feat/0104-data-quality-session"],
+
+      ["Phase 2", "外部数据源与 Provider 治理", "TASK-0201", "free-stockdb Bridge / Provider", "gap", "接入 free-stockdb 的日 K、分钟 K、Tick 和除权数据。", "尚未发现正式 bridge；基座为 data_providers/base.py", "先实现最小 Bridge，不能从策略层直连 SDK。", "feat/0201-free-stockdb"],
+      ["Phase 2", "外部数据源与 Provider 治理", "TASK-0202", "Financial-API Provider / Dataset", "partial", "补充财务报表、指标、公司画像和特色数据的标准化 Provider。", "backend/app/plugins/fuyao/provider.py（已有 fuyao 财务适配）", "定义 financial canonical schema，再接第二数据源。", "feat/0202-financial-api"],
+      ["Phase 2", "外部数据源与 Provider 治理", "TASK-0203", "Provider Health / Retry / Fallback", "gap", "统一健康状态、失败率、重试、退避和 fallback 可观测性。", "现有服务只有局部异常处理，无统一治理模块。", "依赖 0102/0103，集中实现 Provider 健康治理。", "feat/0203-provider-health"],
+      ["Phase 2", "外部数据源与 Provider 治理", "TASK-0204", "Cross-Provider Golden", "gap", "用跨 Provider fixture 验证字段、单位、复权和报告期口径。", "已有 Provider 单测，缺跨源 golden baseline。", "依赖 0201/0202，新增 DATA_GOLDEN_BASELINE。", "test/0204-provider-golden"],
+
+      ["Phase 3", "指标规范与增量一致性", "TASK-0301", "IndicatorSpec", "partial", "把指标定义、依赖列、窗口和版本变成可验证规范。", "backend/app/indicators/pipeline.py::compute_all", "抽出版本化 IndicatorSpec，不复制 pipeline。", "feat/0301-indicator-spec"],
+      ["Phase 3", "指标规范与增量一致性", "TASK-0302", "Indicator Golden Tests", "partial", "建立指标数值、列集合和边界输入的 golden 测试。", "tests/test_enriched_* 与指标相关测试", "增加 golden 值和列级契约。", "test/0302-indicator-golden"],
+      ["Phase 3", "指标规范与增量一致性", "TASK-0303", "Price Level", "partial", "统一关键价位、复权价格和缺失质量状态。", "backend/app/indicators/levels.py; stock_analyzer.py", "对齐价格和复权口径。", "feat/0303-price-level"],
+      ["Phase 3", "指标规范与增量一致性", "TASK-0304", "Incremental Parity", "partial", "证明盘后 batch 与盘中 incremental 的指标结果一致。", "compute_enriched_today 与 enriched 增量测试", "用同一 IndicatorSpec 补 parity 测试。", "test/0304-incremental-parity"],
+
+      ["Phase 4", "策略合同与 EOD 执行", "TASK-0401", "Strategy Contract", "partial", "统一策略元数据、输入、输出、版本、生命周期和来源。", "backend/app/strategy/engine.py::StrategyDef", "补 lifecycle、version、provenance，不破坏注册表。", "feat/0401-strategy-contract"],
+      ["Phase 4", "策略合同与 EOD 执行", "TASK-0402", "Candidate Model", "partial", "统一策略候选、评分、来源和后续复测引用。", "StrategyResult; backtest/candidates.py", "统一候选模型与来源字段。", "feat/0402-candidate-model"],
+      ["Phase 4", "策略合同与 EOD 执行", "TASK-0403", "EOD Seeds", "partial", "定义每日策略种子、日期、输入快照和数据质量。", "strategy_cache.py; daily_pipeline.py", "明确 seed 输入、日期和 provenance。", "feat/0403-eod-seeds"],
+      ["Phase 4", "策略合同与 EOD 执行", "TASK-0404", "EOD Runner", "partial", "编排盘后数据、指标、策略和候选的执行任务。", "jobs/daily_pipeline.py; api/pipeline.py", "补任务状态与 provenance，不直接编排供应商。", "feat/0404-eod-runner"],
+      ["Phase 4", "策略合同与 EOD 执行", "TASK-0405", "Strategy Lifecycle", "partial", "处理策略创建、发布、停用、复制、删除和回滚。", "strategy/engine.py; api/strategy.py", "补稳定 ID 与生命周期状态机。", "feat/0405-strategy-lifecycle"],
+
+      ["Phase 5", "回测与市场规则", "TASK-0501", "Backtest Data", "partial", "统一回测数据加载、窗口、资产类型和时间可得性。", "backtest/engine.py; backtest/strategy.py", "补 data contract 和可得性证明。", "feat/0501-backtest-data"],
+      ["Phase 5", "回测与市场规则", "TASK-0502", "CN Market Rules", "partial", "固化 T+1、涨跌停、费用、滑点和不可成交规则。", "price_limits.py; backtest/engine.py", "增加市场规则 golden fixtures。", "test/0502-cn-market-rules"],
+      ["Phase 5", "回测与市场规则", "TASK-0503", "Validation Gate", "partial", "对区间、数据覆盖、分钟精度和策略输入做 fail-closed 校验。", "api/backtest.py 的区间与分钟覆盖守卫", "统一可记录的拒绝原因。", "feat/0503-validation-gate"],
+      ["Phase 5", "回测与市场规则", "TASK-0504", "Backtest Provenance", "partial", "记录数据、指标、策略、参数和结果的完整来源链。", "回测交易记录; research candidates provenance", "补完整 provenance。", "feat/0504-backtest-provenance"],
+
+      ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0601", "Watch Scope", "partial", "统一全市场、标的、自选分组和动态作用域。", "strategy/monitor.py::MonitorRuleEngine", "固化 scope 版本和失效语义。", "feat/0601-watch-scope"],
+      ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0602", "Rolling Watch", "partial", "实现滚动观察窗口、状态迁移和跨轮询去重。", "MonitorRuleEngine cooldown/state", "补 rolling watch 独立状态契约。", "feat/0602-rolling-watch"],
+      ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0603", "Resonance", "partial", "统一多信号共振、触发窗口和边缘状态。", "intraday_signals.py; abnormal moves; monitor rules", "补 resonance 输入、输出和去重测试。", "feat/0603-resonance"],
+      ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0604", "Alert Rule", "partial", "统一监控 DSL、条件、冷却、状态和触发记录。", "api/monitor_rules.py; strategy/monitor.py", "与现有规则兼容收敛，不建第二套引擎。", "feat/0604-alert-rule"],
+      ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0605", "Alert Delivery", "partial", "统一站内、语音、Webhook、飞书和企微投递状态。", "webhook_adapter.py; SSE; notifications", "补失败重试、状态和审计记录。", "feat/0605-alert-delivery"],
+
+      ["Phase 7", "Market Regime", "TASK-0701", "Market Regime", "partial", "统一情绪阶段、市场宽度、覆盖率和 partial 状态。", "services/market_phase.py; api/regime.py", "对齐 coverage/partial 与质量状态。", "feat/0701-market-regime"],
+      ["Phase 7", "Market Regime", "TASK-0702", "Breadth / Money Effect", "partial", "统一市场宽度、涨跌家数、资金效应和主线输入。", "market phase/mainline services", "统一输入数据源和缺失处理。", "feat/0702-breadth-money-effect"],
+      ["Phase 7", "Market Regime", "TASK-0703", "Regime Smoothing", "partial", "固化 EMA、确认天数和跨日状态。", "tests/test_market_phase.py; test_regime_builder.py", "补确定性 golden 与跨日状态。", "test/0703-regime-smoothing"],
+      ["Phase 7", "Market Regime", "TASK-0704", "Regime UI", "partial", "把阶段、覆盖率和数据质量在界面清楚展示。", "frontend Regime page", "优先用扩展 route/slot，不复制核心页面。", "feat/0704-regime-ui"],
+
+      ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0801", "Transaction DB", "gap", "建立交易事件、计划、决定和审计的持久化边界。", "尚未发现 transaction DB 或交易事件模型。", "先选存储边界并写 ADR，再实现 schema。", "feat/0801-transaction-db"],
+      ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0802", "Thesis", "gap", "保存研究论点、证据、反证和版本。", "尚未发现正式 Thesis 模块。", "依赖 0801，定义 Markdown/JSON 兼容。", "feat/0802-thesis"],
+      ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0803", "Trade Plan", "gap", "把候选、计划价位、仓位和有效期结构化。", "尚未发现 TradePlan 模型和 API。", "依赖 0802 与候选 provenance。", "feat/0803-trade-plan"],
+      ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0804", "Decision Gate", "gap", "实现可解释、可审计、可过期的决策门。", "尚未发现 DecisionGate 状态机。", "依赖 0803、风险状态和审计字段。", "feat/0804-decision-gate"],
+      ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0805", "Journal", "gap", "记录计划、决定、订单、成交和复盘日志。", "现有 AI reports 不能替代交易 Journal。", "依赖 0801/0804，先做只读审计闭环。", "feat/0805-journal"],
+
+      ["Phase 9", "Unified Signal、Paper Loop、Review", "TASK-0901", "Unified Signal", "partial", "把策略、指标、自定义信号和监控事件统一为可追踪 Signal。", "custom_signals.py; monitor events; strategy signals", "新增适配层，不改写已有信号语义。", "feat/0901-unified-signal"],
+      ["Phase 9", "Unified Signal、Paper Loop、Review", "TASK-0902", "Paper Loop", "gap", "建立纸面执行、模拟成交、持仓和结果回放闭环。", "尚未发现正式 paper execution loop。", "依赖 0901、0804 与 OMS 前置约束。", "feat/0902-paper-loop"],
+      ["Phase 9", "Unified Signal、Paper Loop、Review", "TASK-0903", "Daily Review", "partial", "把每日信号、决定、结果和复盘证据串起来。", "market recap; AI reports; review stores", "定义 review 输入和不可变快照。", "feat/0903-daily-review"],
+
+      ["Phase 10", "Risk 与 OMS", "TASK-1001", "Risk Contract", "gap", "定义风险检查输入、输出、拒绝理由和状态。", "尚未发现正式 risk contract。", "依赖 Decision/Plan，先做 fail-closed 协议。", "feat/1001-risk-contract"],
+      ["Phase 10", "Risk 与 OMS", "TASK-1002", "Risk Rules", "gap", "实现仓位、暴露、涨跌停、流动性和交易时段规则。", "尚未发现 risk rules registry。", "依赖 1001 与市场规则 golden。", "feat/1002-risk-rules"],
+      ["Phase 10", "Risk 与 OMS", "TASK-1003", "OMS State", "gap", "建立订单、状态、成交回报和取消的状态机。", "尚未发现 OMS 状态机。", "依赖 transaction DB、risk contract 和统一事件。", "feat/1003-oms-state"],
+      ["Phase 10", "Risk 与 OMS", "TASK-1004", "Idempotency / Outbox", "gap", "保证重试、崩溃恢复和消息投递不重复。", "尚未发现 idempotency/outbox 实现。", "依赖 1003，先定义唯一键和 crash recovery。", "feat/1004-idempotency-outbox"],
+      ["Phase 10", "Risk 与 OMS", "TASK-1005", "Position Projection", "gap", "从已确认事件构建可审计的持仓投影。", "尚未发现持仓 projection。", "依赖 1003/1004，不从订单日志临时推导 UI。", "feat/1005-position-projection"],
+
+      ["Phase 11", "Broker 与 QMT", "TASK-1101", "Broker Protocol", "gap", "定义券商适配器、连接、订单和回报的最小协议。", "尚未发现 broker protocol。", "依赖 OMS，先实现 mock protocol。", "feat/1101-broker-protocol"],
+      ["Phase 11", "Broker 与 QMT", "TASK-1102", "QMT Agent Core", "gap", "把 QMT 运行隔离为独立 Agent 进程。", "尚未发现 QMT agent core。", "依赖 1101，Windows 集成隔离在 Agent。", "feat/1102-qmt-agent-core"],
+      ["Phase 11", "Broker 与 QMT", "TASK-1103", "QMT Quote", "gap", "接入 QMT 行情并带 quality/provenance。", "尚未发现 QMT quote adapter。", "依赖 1101/0104。", "feat/1103-qmt-quote"],
+      ["Phase 11", "Broker 与 QMT", "TASK-1104", "QMT Trade", "gap", "接入 QMT 下单、撤单和回报。", "尚未发现 QMT trade adapter。", "依赖 1102/1004，默认 HUMAN_CONFIRM/LIVE_SHADOW。", "feat/1104-qmt-trade"],
+      ["Phase 11", "Broker 与 QMT", "TASK-1105", "QMT Reconcile", "gap", "对账账户、订单、成交和持仓。", "尚未发现 reconcile 服务。", "依赖成交回报、持仓 projection 和账户快照。", "feat/1105-qmt-reconcile"],
+      ["Phase 11", "Broker 与 QMT", "TASK-1106", "QMT Safety / Kill Switch", "gap", "实现停止交易、断连、权限和异常状态安全门。", "尚未发现 QMT safety/kill switch。", "依赖 1102-1105，AUTO 默认关闭。", "feat/1106-qmt-safety"],
+
+      ["Phase 12", "Reconcile、Human Confirm、Small Live", "TASK-1201", "Account Reconcile", "gap", "定期核对账户余额、持仓、订单和成交。", "尚未发现 account reconcile 领域模块。", "依赖 QMT reconcile。", "feat/1201-account-reconcile"],
+      ["Phase 12", "Reconcile、Human Confirm、Small Live", "TASK-1202", "Human Confirm", "gap", "为高风险动作建立人工确认、过期和审计机制。", "尚未发现 HUMAN_CONFIRM 审批模型。", "依赖 DecisionGate、OMS 和审计。", "feat/1202-human-confirm"],
+      ["Phase 12", "Reconcile、Human Confirm、Small Live", "TASK-1203", "Live Shadow", "gap", "在不真实下单的情况下验证完整交易链。", "尚未发现 LIVE_SHADOW 测试闭环。", "依赖 mock broker、reconcile、kill switch。", "test/1203-live-shadow"],
+      ["Phase 12", "Reconcile、Human Confirm、Small Live", "TASK-1204", "Small Live", "blocked", "在小额、人工确认和安全门下进行受控实盘。", "安全前置尚未完成，当前禁止自动交易。", "必须通过 1203 和 1106。", "release/1204-small-live"],
+
+      ["Phase 13", "运维与发布", "TASK-1301", "Backup / Restore", "partial", "备份、恢复、迁移和回滚运行数据。", "dev.ps1、Docker、data 目录和认证配置已存在。", "补 backup/restore 演练，不把 data 纳入 Git。", "ops/1301-backup-restore"],
+      ["Phase 13", "运维与发布", "TASK-1302", "Observability", "partial", "统一日志、指标、任务 correlation id 和敏感信息过滤。", "日志、任务记录、SSE、数据状态 API 已存在。", "补统一 metrics 和 correlation id。", "ops/1302-observability"],
+      ["Phase 13", "运维与发布", "TASK-1303", "Security", "partial", "补密钥轮换、最小权限、认证和外部 Agent 安全边界。", "访问认证、Key 脱敏和插件隔离已存在。", "补 secret rotation 与 Agent 边界。", "ops/1303-security"],
+      ["Phase 13", "运维与发布", "TASK-1304", "Release Runbook", "partial", "把发布、升级、数据迁移、恢复和回滚变成清单。", "docs/deployment.md 与启动脚本已存在。", "补发布检查清单。", "ops/1304-release-runbook"],
+
+      ["Phase 14", "Research Adapter 与 ML", "TASK-1401", "Research Adapter", "gap", "为外部研究引擎建立只读、可追踪的适配边界。", "尚未发现独立 research adapter contract。", "依赖 Unified Signal，先定义只读 boundary。", "feat/1401-research-adapter"],
+      ["Phase 14", "Research Adapter 与 ML", "TASK-1402", "QuantMind Adapter", "gap", "接入 QuantMind 研究结果而不影响交易状态。", "尚未发现 QuantMind adapter。", "依赖 1401，隔离 OMS/QMT。", "feat/1402-quantmind-adapter"],
+      ["Phase 14", "Research Adapter 与 ML", "TASK-1403", "ML Signal", "gap", "把 ML 输出接入统一 Signal、Decision、Risk 生命周期。", "尚未发现 ML signal lifecycle。", "依赖 1402，不能绕过风险门。", "feat/1403-ml-signal"],
+      ["Phase 14", "Research Adapter 与 ML", "TASK-1404", "Research Isolation", "gap", "证明研究代码不能改变交易状态或绕过安全边界。", "尚未发现 research isolation 测试。", "依赖 1403，验证研究与交易隔离。", "test/1404-research-isolation"]
+    ];
+
+    const statusText = { done: "已完成", partial: "部分完成", gap: "待开发", blocked: "被阻塞" };
+    const phaseRoot = document.getElementById("phases");
+    const phaseFilter = document.getElementById("phase-filter");
+    const search = document.getElementById("search");
+    const empty = document.getElementById("empty");
+    let activeStatus = "all";
+
+    const phaseNames = [...new Set(tasks.map(item => item[0]))];
+    phaseNames.forEach(name => {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      phaseFilter.appendChild(option);
+    });
+
+    function render() {
+      const query = search.value.trim().toLowerCase();
+      const selectedPhase = phaseFilter.value;
+      phaseRoot.innerHTML = "";
+      let visibleTasks = 0;
+
+      phaseNames.forEach(phase => {
+        if (selectedPhase !== "all" && selectedPhase !== phase) return;
+        const phaseTasks = tasks.filter(item => item[0] === phase &&
+          (activeStatus === "all" || item[4] === activeStatus) &&
+          (!query || item.slice(0, 8).join(" ").toLowerCase().includes(query)));
+        if (!phaseTasks.length) return;
+        visibleTasks += phaseTasks.length;
+
+        const section = document.createElement("section");
+        section.className = "phase";
+        const phaseDone = phaseTasks.filter(item => item[4] === "done").length;
+        section.innerHTML = `<div class="phase-head"><h2>${phase} · ${phaseTasks[0][1]}</h2><p>${phaseDone}/${phaseTasks.length} 已完成 · 当前筛选结果</p></div><div class="task-grid"></div>`;
+        const grid = section.querySelector(".task-grid");
+        phaseTasks.forEach(item => {
+          const [phaseName, phaseTitle, id, title, status, focus, entry, next, branch] = item;
+          const card = document.createElement("article");
+          card.className = "task";
+          card.dataset.status = status;
+          card.innerHTML = `
+            <div class="task-top">
+              <h3><code>${id}</code><br>${title}</h3>
+              <span class="badge ${status}">${statusText[status]}</span>
+            </div>
+            <p class="focus">${focus}</p>
+            <dl class="detail">
+              <dt>真实入口</dt><dd><code>${entry}</code></dd>
+              <dt>下一步</dt><dd>${next}</dd>
+              <dt>建议分支</dt><dd><code>${branch}</code></dd>
+            </dl>`;
+          grid.appendChild(card);
+        });
+        phaseRoot.appendChild(section);
+      });
+      empty.style.display = visibleTasks ? "none" : "block";
+    }
+
+    function updateSummary() {
+      const counts = tasks.reduce((result, item) => {
+        result[item[4]] += 1;
+        return result;
+      }, { done: 0, partial: 0, gap: 0, blocked: 0 });
+      const percent = (counts.done / tasks.length * 100);
+      document.getElementById("done-count").textContent = counts.done;
+      document.getElementById("partial-count").textContent = counts.partial;
+      document.getElementById("gap-count").textContent = counts.gap;
+      document.getElementById("blocked-count").textContent = counts.blocked;
+      document.getElementById("percent").textContent = `${percent.toFixed(1)}%`;
+      document.querySelector(".ring").style.setProperty("--progress", `${percent}%`);
+      document.getElementById("summary-title").textContent = `${counts.done}/${tasks.length} 个任务已完成`;
+      document.getElementById("summary-text").textContent = `当前阶段：TASK-0104 · DataQuality 与 MarketSession。部分完成项表示已有基础但还没有达到计划验收边界。`;
+    }
+
+    document.querySelectorAll("[data-filter]").forEach(button => {
+      button.addEventListener("click", () => {
+        activeStatus = button.dataset.filter;
+        document.querySelectorAll("[data-filter]").forEach(item => item.classList.toggle("active", item === button));
+        render();
+      });
+    });
+    search.addEventListener("input", render);
+    phaseFilter.addEventListener("change", render);
+    updateSummary();
+    render();
+  </script>
+</body>
+</html>

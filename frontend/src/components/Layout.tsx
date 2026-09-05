@@ -181,20 +181,23 @@ function SidebarIndexQuotes({ rows, items }: { rows: IndexQuote[] | undefined; i
 // 能力路由架构下的侧栏状态: 不再展示「主数据源 + TickFlow 档位」(单源时代遗留 —
 // 五个能力各自路由, 拿日K的源代表全局是随意的), 改为回答「各能力当前是否都有源在供」。
 // 档位/订阅信息归设置页 TickFlow 介绍卡 (档位词仅出现在 TickFlow 专属界面的设计规则)。
-// 单能力方格: 可用=绿 / 日K缺失=红 / 其他缺失=琥珀 (与悬浮卡中同色, 一眼对应)
-function capSquareCls(c: { id: string; usable: boolean }) {
-  return c.usable ? 'bg-accent' : c.id === 'daily' ? 'bg-danger' : 'bg-warning/80'
+// 单能力方格: 正常=绿 / 不可用=红(日K)或琥珀(其他) / 降级=琥珀
+function capSquareCls(c: { id: string; status: 'USABLE' | 'DEGRADED' | 'UNAVAILABLE' }) {
+  if (c.status === 'USABLE') return 'bg-accent'
+  return c.id === 'daily' && c.status === 'UNAVAILABLE' ? 'bg-danger' : 'bg-warning/80'
 }
 
 function DataSourceHealthBadge({ matrix }: { matrix: CapabilityMatrix | undefined }) {
   const caps = matrix?.capabilities ?? []
   const loading = caps.length === 0
   const usableCount = caps.filter(c => c.usable).length
-  const down = caps.filter(c => !c.usable)
+  const down = caps.filter(c => c.status === 'UNAVAILABLE')
+  const degraded = caps.filter(c => c.status === 'DEGRADED')
   // 日K是核心能力 (其他一切派生于它): 挂了用危险色; 一般缺项琥珀; 全可用绿
   const level = loading
     ? 'loading'
-    : down.length === 0 ? 'ok' : down.some(c => c.id === 'daily') ? 'danger' : 'warn'
+    : down.length > 0 ? down.some(c => c.id === 'daily') ? 'danger' : 'warn'
+      : degraded.length > 0 ? 'warn' : 'ok'
   const countCls = level === 'ok' ? 'text-accent/80'
     : level === 'danger' ? 'text-danger'
     : level === 'warn' ? 'text-warning'
@@ -287,11 +290,15 @@ function DataSourceHealthBadge({ matrix }: { matrix: CapabilityMatrix | undefine
                   <span className={`h-2 w-2 shrink-0 rounded-[2px] ${capSquareCls(c)}`} />
                   <span className="shrink-0 text-xs font-medium text-secondary">{c.label}</span>
                   <span className="ml-auto flex min-w-0 shrink items-center gap-1.5">
-                    {c.usable ? (
+                    {c.status === 'USABLE' ? (
                       <>
                         <span className="truncate text-[11px] text-muted">{c.effective_display}</span>
                         <CheckCircle2 className="h-3 w-3 shrink-0 text-accent" />
                       </>
+                    ) : c.status === 'DEGRADED' ? (
+                      <span className="truncate text-[11px] text-warning" title="当前能力处于降级状态">
+                        {c.effective_display} · 降级
+                      </span>
                     ) : (
                       <span className="text-[11px] text-muted/70">未接入</span>
                     )}

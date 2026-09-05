@@ -93,6 +93,14 @@ def probe_api_key(api_key: str) -> tuple[bool, str]:
         client.snapshot_page(limit=1)
         return True, "ok"
     except FuyaoError as e:
+        message = str(e)
+        if "code=2003" in message:
+            return False, (
+                "fuyao 返回 code=2003: API Key 无效或已撤销,"
+                "请在扶摇控制台确认 Key 状态并检查行情快照接口权限"
+            )
+        if "code=2001" in message:
+            return False, f"Key 无效或缺少认证(code=2001): {e}"
         return False, f"Key 无效或网络失败: {e}"
     finally:
         if client is not None:

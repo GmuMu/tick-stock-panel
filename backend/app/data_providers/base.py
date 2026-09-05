@@ -7,7 +7,7 @@ backtests stay data-source agnostic.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Literal, Protocol
 
@@ -24,6 +24,44 @@ class ProviderCapabilities:
     minute: bool = False
     realtime: bool = False
     financial: bool = False
+
+
+@dataclass(frozen=True)
+class ProviderRoute:
+    """One capability routing decision and its safe fallback provenance.
+
+    ``provider`` is intentionally kept out of ``provenance`` so the public
+    status payload never exposes a provider object or provider-specific data.
+    """
+
+    dataset: str
+    requested_provider: str
+    effective_provider: str
+    provider: object | None = None
+    fallback: bool = False
+    fallback_reason: str | None = None
+    error: str | None = None
+
+    def with_fallback(self, reason: str, *, error: str | None = None) -> ProviderRoute:
+        """Return a TickFlow fallback decision without mutating this route."""
+        return replace(
+            self,
+            effective_provider="tickflow",
+            provider=None,
+            fallback=True,
+            fallback_reason=reason,
+            error=error,
+        )
+
+    def provenance(self) -> dict[str, object | None]:
+        """Return the serializable, stable route evidence contract."""
+        return {
+            "dataset": self.dataset,
+            "requested_provider": self.requested_provider,
+            "effective_provider": self.effective_provider,
+            "fallback": self.fallback,
+            "fallback_reason": self.fallback_reason,
+        }
 
 
 class MarketDataProvider(Protocol):

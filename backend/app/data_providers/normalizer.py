@@ -3,6 +3,15 @@ from __future__ import annotations
 
 import polars as pl
 
+from app.data_providers.schemas import (
+    normalize_amount,
+    normalize_date,
+    normalize_epoch_ms,
+    normalize_exchange,
+    normalize_price,
+    normalize_symbol,
+    normalize_volume,
+)
 from app.indicators.pipeline import filter_halt_days
 
 DAILY_COLS = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "quote_ts"]
@@ -27,11 +36,11 @@ def to_polars(data) -> pl.DataFrame:
         return pl.from_pandas(data.reset_index())
     try:
         return pl.DataFrame(data)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return pl.DataFrame()
 
 
-def normalize_daily(data, default_symbol: str | None = None, source: str = "tickflow") -> pl.DataFrame:  # noqa: ARG001
+def normalize_daily(data, default_symbol: str | None = None, source: str = "tickflow") -> pl.DataFrame:
     df = to_polars(data)
     if df.is_empty():
         return df
@@ -46,20 +55,31 @@ def normalize_daily(data, default_symbol: str | None = None, source: str = "tick
     df = df.rename({k: v for k, v in rename_map.items() if k in df.columns})
     if "symbol" not in df.columns and default_symbol:
         df = df.with_columns(pl.lit(default_symbol).alias("symbol"))
-    if "date" in df.columns and df.schema["date"] != pl.Date:
-        df = df.with_columns(pl.col("date").cast(pl.Date, strict=False))
+    if "symbol" in df.columns:
+        df = df.with_columns(
+            pl.col("symbol").map_elements(normalize_symbol, return_dtype=pl.Utf8).alias("symbol")
+        )
+    if "date" in df.columns:
+        df = df.with_columns(
+            pl.col("date").map_elements(normalize_date, return_dtype=pl.Date).alias("date")
+        )
     # quote_ts: 毫秒级行情时间戳, 用于盘后校验/量比折算。保留为 Int64, 缺失则置 null。
     if "quote_ts" in df.columns:
-        df = df.with_columns(pl.col("quote_ts").cast(pl.Int64, strict=False))
+        df = df.with_columns(
+            pl.col("quote_ts").map_elements(normalize_epoch_ms, return_dtype=pl.Int64).alias("quote_ts")
+        )
     for col in ("open", "high", "low", "close", "volume", "amount"):
         if col in df.columns:
-            df = df.with_columns(pl.col(col).cast(pl.Float64, strict=False))
+            normalizer = normalize_volume if col == "volume" else normalize_amount if col == "amount" else normalize_price
+            df = df.with_columns(
+                pl.col(col).map_elements(normalizer, return_dtype=pl.Float64).alias(col)
+            )
     df = filter_halt_days(df)
     keep = [c for c in DAILY_COLS if c in df.columns]
     return df.select(keep) if keep else pl.DataFrame()
 
 
-def normalize_adj_factors(data, source: str = "tickflow") -> pl.DataFrame:  # noqa: ARG001
+def normalize_adj_factors(data, source: str = "tickflow") -> pl.DataFrame:
     df = to_polars(data)
     if df.is_empty():
         return df
@@ -69,22 +89,18 @@ def normalize_adj_factors(data, source: str = "tickflow") -> pl.DataFrame:  # no
         "adj_factor": "ex_factor",
     }
     df = df.rename({k: v for k, v in rename_map.items() if k in df.columns})
+    if "symbol" in df.columns:
+        df = df.with_columns(
+            pl.col("symbol").map_elements(normalize_symbol, return_dtype=pl.Utf8).alias("symbol")
+        )
     if "trade_date" in df.columns:
-        if df.schema["trade_date"] in {pl.Int64, pl.Int32, pl.UInt64, pl.UInt32, pl.Float64, pl.Float32}:
-            # 毫秒时间戳 → 北京墙钟日期 (直接 from_epoch().dt.date() 是 UTC 日期,
-            # 除权事件时间戳为北京零点 = UTC 前一日 16:00, 会整体早一天)。
-            df = df.with_columns(
-                pl.from_epoch(pl.col("trade_date").cast(pl.Int64), time_unit="ms")
-                .dt.replace_time_zone("UTC")
-                .dt.convert_time_zone("Asia/Shanghai")
-                .dt.replace_time_zone(None)
-                .dt.date()
-                .alias("trade_date")
-            )
-        else:
-            df = df.with_columns(pl.col("trade_date").cast(pl.Date, strict=False))
+        df = df.with_columns(
+            pl.col("trade_date").map_elements(normalize_date, return_dtype=pl.Date).alias("trade_date")
+        )
     if "ex_factor" in df.columns:
-        df = df.with_columns(pl.col("ex_factor").cast(pl.Float64, strict=False))
+        df = df.with_columns(
+            pl.col("ex_factor").map_elements(normalize_price, return_dtype=pl.Float64).alias("ex_factor")
+        )
     keep = [c for c in ADJ_FACTOR_COLS if c in df.columns]
     return df.select(keep).drop_nulls() if len(keep) == len(ADJ_FACTOR_COLS) else pl.DataFrame()
 
@@ -94,14 +110,19 @@ def normalize_instruments(rows: list[dict], asset_type: str, source: str = "tick
         return pl.DataFrame()
     out: list[dict] = []
     for item in rows:
-        symbol = item.get("symbol")
+        symbol = normalize_symbol(item.get("symbol"))
         if not symbol:
             continue
+        exchange = item.get("exchange")
+        if exchange:
+            exchange = normalize_exchange(exchange) or str(exchange).strip().upper()
+        else:
+            exchange = symbol.rsplit(".", 1)[1] if "." in symbol else None
         out.append({
-            "symbol": str(symbol),
+            "symbol": symbol,
             "name": item.get("name") or str(symbol),
             "code": item.get("code") or str(symbol).split(".")[0],
-            "exchange": item.get("exchange"),
+            "exchange": exchange,
             "asset_type": asset_type,
             "source": source,
         })

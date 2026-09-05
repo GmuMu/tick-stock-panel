@@ -196,6 +196,53 @@ def test_successful_empty_index_refresh_clears_cache(monkeypatch):
     assert service.get_index_quotes().is_empty()
 
 
+def test_custom_realtime_failure_falls_back_to_tickflow_with_provenance(monkeypatch):
+    """实时自定义源异常时改走 TickFlow, 且 status 保留降级证据。"""
+    from app.services import preferences as prefs_mod
+
+    class _Broken:
+        def get_realtime(self) -> list[dict]:
+            raise RuntimeError("realtime endpoint down")
+
+    service = qs.QuoteService()
+    processed: list[list[dict]] = []
+    monkeypatch.setattr(prefs_mod, "get_realtime_data_provider", lambda: "fuyao")
+    import app.data_providers.custom as custom_mod
+
+    monkeypatch.setattr(custom_mod, "provider_has_dataset", lambda name, dataset: dataset == "realtime")
+    monkeypatch.setattr(custom_mod, "get_provider", lambda name: _Broken())
+    monkeypatch.setattr(
+        service,
+        "_process_full_market_records",
+        lambda records, *, t0, now_ts, replace_index_cache=True: processed.append(records),
+    )
+
+    class _TickFlow:
+        class Quotes:
+            @staticmethod
+            def get_by_universes(universes):
+                return []
+
+            @staticmethod
+            def get(symbols):
+                return [{"symbol": symbols[0], "last_price": 1.0}]
+
+        quotes = Quotes()
+
+    monkeypatch.setattr("app.tickflow.client.get_paid_realtime_client", lambda: _TickFlow())
+
+    service._fetch_full_market_quotes()
+
+    assert processed
+    assert service.status()["realtime_route"] == {
+        "dataset": "realtime",
+        "requested_provider": "fuyao",
+        "effective_provider": "tickflow",
+        "fallback": True,
+        "fallback_reason": "provider_call_failed",
+    }
+
+
 # ---- 监控分时注入: 全量分钟健康时股票读本地分区 ----
 
 

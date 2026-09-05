@@ -349,6 +349,40 @@ def test_custom_provider_increment_round_via_latest(tmp_path, monkeypatch):
     assert st["repair_only"] is False
 
 
+def test_custom_provider_latest_failure_falls_back_to_tickflow_with_provenance(
+    tmp_path, monkeypatch,
+):
+    """自定义增量端点异常时立即走 TickFlow, 并保留调用失败证据。"""
+    provider = _FakeCustomProvider(batch=True, latest=True)
+
+    def _broken_latest(count=3):
+        raise RuntimeError("latest endpoint down")
+
+    provider.get_intraday_latest = _broken_latest
+    svc = _svc(tmp_path, monkeypatch, full_minute_provider="myfm", custom=provider)
+    monkeypatch.setattr(
+        MinuteRefreshService, "_today_coverage_lag_minutes", lambda self: 0.2,
+    )
+    _patch_write(monkeypatch)
+    monkeypatch.setattr(
+        "app.services.kline_sync.fetch_intraday_universe_increment",
+        lambda: (_inc_df(), 1),
+    )
+
+    svc._run_round()
+
+    st = svc.status()
+    assert st["last_mode"] == "increment"
+    assert st["last_requests"] == 1
+    assert st["route_provenance"] == {
+        "dataset": "full_minute",
+        "requested_provider": "myfm",
+        "effective_provider": "tickflow",
+        "fallback": True,
+        "fallback_reason": "provider_call_failed",
+    }
+
+
 def test_custom_provider_latest_missing_forces_full_with_minute_fallback(tmp_path, monkeypatch):
     """无 get_intraday_latest: 增量轮退化为修复轮, 批量未实现时回退 get_minute
     (当日窗口), 节奏下限抬到 60s。"""
@@ -392,6 +426,13 @@ def test_custom_provider_unresolved_degrades_to_tickflow(tmp_path, monkeypatch):
     st = svc.status()
     assert st["provider_effective"] == "tickflow"
     assert st["last_mode"] == "increment"
+    assert st["route_provenance"] == {
+        "dataset": "full_minute",
+        "requested_provider": "not-registered",
+        "effective_provider": "tickflow",
+        "fallback": True,
+        "fallback_reason": "dataset_unavailable",
+    }
 
 
 def test_status_reports_gate_reason_when_stopped(tmp_path, monkeypatch):

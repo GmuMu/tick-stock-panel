@@ -52,6 +52,27 @@ def test_minute_request_parameter_names_survive_config_round_trip():
     assert exposed["datasets"]["minute"]["freq_param"] == "period"
 
 
+def test_full_minute_dataset_survives_yaml_load(tmp_path: Path):
+    path = tmp_path / "full_minute.yaml"
+    path.write_text(
+        "\n".join([
+            "name: test_source",
+            "datasets:",
+            "  full_minute:",
+            "    url: https://example.test/full-minute",
+            "    asset_type_param: asset",
+            "    freq_param: period",
+        ]),
+        encoding="utf-8",
+    )
+
+    parsed = load_config(path)
+
+    assert parsed.has_dataset("full_minute")
+    assert parsed.datasets["full_minute"].asset_type_param == "asset"
+    assert parsed.datasets["full_minute"].freq_param == "period"
+
+
 def test_timeout_survives_config_round_trip():
     """timeout 必须在 UI 保存往返中保留 (核心修复), 且默认 30 不污染 YAML。"""
     dataset = DatasetConfigIn(

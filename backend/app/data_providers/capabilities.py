@@ -19,17 +19,68 @@ usable 契约: 每个能力额外给出 usable = 生效源当前能否真正提�
 (生效源在 candidates 中)。各页面的能力门控 (缺能力提示 → 数据源配置)
 统一以 usable 为准, 而不是 TickFlow 套餐视角 — 路由到可用插件时同样可用,
 路由到 TickFlow 但档位不足时同样不可用。
+
+能力状态契约:
+  - status: 面向业务门控的稳定大写枚举: USABLE / DEGRADED / UNAVAILABLE。
+  - health: 当前生效源的健康状态: healthy / degraded / unavailable。
+  - priority: 注册表定义的稳定业务优先级, 数字越小越重要。
+健康的生效源为 USABLE, 生效源已可用但健康状态异常或当前路由不可用且
+存在可切换候选时为 DEGRADED, 没有候选时为 UNAVAILABLE。
 """
 
 from __future__ import annotations
 
+from typing import Literal, NotRequired, TypedDict
+
 from app.data_providers import custom as custom_sources
+
+CapabilityStatus = Literal["USABLE", "DEGRADED", "UNAVAILABLE"]
+CapabilityHealth = Literal["healthy", "degraded", "unavailable"]
+
+
+class CapabilityCandidate(TypedDict):
+    name: str
+    display: str
+    kind: Literal["builtin", "plugin", "custom"]
+    available: bool
+    status: str
+    note: NotRequired[str | None]
+
+
+class DataCapability(TypedDict):
+    """Stable API view for one standard data capability."""
+
+    id: str
+    label: str
+    desc: str
+    field: str | None
+    default: str
+    priority: int
+    tf_tier: str
+    tf_available: bool
+    usable: bool
+    status: CapabilityStatus
+    health: CapabilityHealth
+    provider: str
+    source: str
+    current: str
+    current_display: str
+    effective: str
+    effective_display: str
+    candidates: list[CapabilityCandidate]
+    pending: list[CapabilityCandidate]
+
+
+class CapabilityMatrix(TypedDict):
+    tickflow_tier: str
+    capabilities: list[DataCapability]
 
 CAPABILITY_REGISTRY: list[dict] = [
     {
         "id": "daily",
         "label": "日K",
         "desc": "历史K线与实时覆写",
+        "priority": 10,
         "field": "daily_data_provider",
         "default": "tickflow",
         "tf_tier": "none",
@@ -38,6 +89,7 @@ CAPABILITY_REGISTRY: list[dict] = [
         "id": "adj_factor",
         "label": "除权因子",
         "desc": "前复权计算基准",
+        "priority": 30,
         "field": "adj_factor_provider",
         "default": "tickflow",
         "tf_tier": "starter",
@@ -48,6 +100,7 @@ CAPABILITY_REGISTRY: list[dict] = [
         "id": "realtime",
         "label": "实时行情",
         "desc": "全市场实时快照",
+        "priority": 20,
         "field": "realtime_data_provider",
         "default": "tickflow",
         "tf_tier": "starter",
@@ -56,6 +109,7 @@ CAPABILITY_REGISTRY: list[dict] = [
         "id": "minute",
         "label": "分钟K",
         "desc": "分时图与分钟回测",
+        "priority": 40,
         "field": "minute_data_provider",
         "default": "tickflow",
         "tf_tier": "pro",
@@ -64,6 +118,7 @@ CAPABILITY_REGISTRY: list[dict] = [
         "id": "depth5",
         "label": "五档盘口",
         "desc": "连板梯队封单与盘口深度",
+        "priority": 50,
         "field": "depth5_data_provider",
         "default": "tickflow",
         "tf_tier": "pro",
@@ -73,6 +128,7 @@ CAPABILITY_REGISTRY: list[dict] = [
         "id": "financial",
         "label": "财务数据",
         "desc": "财务指标与三大报表",
+        "priority": 60,
         "field": "financial_data_provider",
         "default": "tickflow",
         "tf_tier": "expert",
@@ -81,6 +137,7 @@ CAPABILITY_REGISTRY: list[dict] = [
         "id": "full_minute",
         "label": "全量分钟",
         "desc": "盘中全市场当日分钟落盘 (冷启动全天 + 标的池增量)",
+        "priority": 45,
         "field": "full_minute_data_provider",
         "default": "tickflow",
         "tf_tier": "expert",
@@ -144,7 +201,31 @@ def _display_of(sources: list[dict], name: str) -> str:
     return name
 
 
-def build_capability_matrix(current: dict[str, str], tickflow_tier: str = "none") -> dict:
+def _candidate_health(candidate: dict) -> str:
+    """Normalize provider status into the capability health vocabulary."""
+    status = str(candidate.get("status") or "").strip().lower()
+    if status in {"ok", "healthy", "ready", "available"}:
+        return "healthy"
+    return "degraded"
+
+
+def _health_status(usable: bool, candidates: list[dict], effective: str) -> tuple[str, str]:
+    """Return the stable capability status and current-source health.
+
+    ``candidates`` is intentionally the already-filtered list: a provider that
+    is not a usable candidate must not make a capability look healthy merely
+    because another provider is available.
+    """
+    if usable:
+        current = next(c for c in candidates if c["name"] == effective)
+        health = _candidate_health(current)
+        return ("USABLE" if health == "healthy" else "DEGRADED"), health
+    if candidates:
+        return "DEGRADED", "degraded"
+    return "UNAVAILABLE", "unavailable"
+
+
+def build_capability_matrix(current: dict[str, str], tickflow_tier: str = "none") -> CapabilityMatrix:
     """注册表 + 源能力声明 + 当前偏好 → 能力路由矩阵。
 
     current 为 {偏好字段: 当前值}, 由 API 层经 preferences getters 注入;
@@ -182,15 +263,21 @@ def build_capability_matrix(current: dict[str, str], tickflow_tier: str = "none"
             }
             (candidates if s["available"] else pending).append(entry)
         usable = any(c["name"] == effective for c in candidates)
+        status, health = _health_status(usable, candidates, effective)
         capabilities.append({
             "id": cap["id"],
             "label": cap["label"],
             "desc": cap["desc"],
             "field": cap["field"],
             "default": cap["default"],
+            "priority": cap["priority"],
             "tf_tier": cap["tf_tier"],
             "tf_available": tf_available,
             "usable": usable,
+            "status": status,
+            "health": health,
+            "provider": effective,
+            "source": _display_of(sources, effective),
             "current": effective,
             "current_display": _display_of(sources, effective),
             "effective": effective,

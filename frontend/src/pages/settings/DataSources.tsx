@@ -137,10 +137,22 @@ function patchMatrix(
   for (const cap of caps) {
     const value = cap.field != null ? changes[cap.field] : undefined
     if (value !== undefined) {
+      const selected = cap.candidates.find(c => c.name === value)
       cap.current = value
       cap.current_display = displayOfName({ capabilities: caps }, value)
       cap.effective = value
       cap.effective_display = cap.current_display
+      cap.provider = value
+      cap.source = cap.current_display
+      cap.usable = Boolean(selected)
+      if (selected) {
+        const healthy = ['ok', 'healthy', 'ready', 'available'].includes(selected.status.toLowerCase())
+        cap.health = healthy ? 'healthy' : 'degraded'
+        cap.status = healthy ? 'USABLE' : 'DEGRADED'
+      } else {
+        cap.health = cap.candidates.length > 0 ? 'degraded' : 'unavailable'
+        cap.status = cap.candidates.length > 0 ? 'DEGRADED' : 'UNAVAILABLE'
+      }
     }
   }
   return { ...matrix, capabilities: caps }
@@ -167,7 +179,8 @@ function CapabilityCard({ cap, pendingKey, onSelect }: {
   const Icon = CAP_ICON[cap.id] ?? Database
   const busy = (provider: string) => pendingKey === `${cap.field}:${provider}`
   // 能力中立判定: usable=False 即当前路由的源供不了 (TickFlow 档位不足或插件未就绪同待遇)
-  const unmet = !cap.usable
+  const unmet = cap.status === 'UNAVAILABLE'
+  const degraded = cap.status === 'DEGRADED'
   const chipsEmpty = cap.candidates.length === 0 && cap.pending.length === 0
   return (
     <div className="rounded-lg border border-border/50 bg-elevated/20 px-3 py-2.5 flex flex-col transition-colors hover:border-border">
@@ -189,6 +202,14 @@ function CapabilityCard({ cap, pendingKey, onSelect }: {
           >
             <AlertTriangle className="h-3 w-3 shrink-0" />
             能力不可用
+          </span>
+        ) : degraded ? (
+          <span
+            className="inline-flex items-center gap-1 text-[11px] font-medium text-warning truncate"
+            title="当前路由仍可使用, 但数据源健康状态处于降级"
+          >
+            <AlertTriangle className="h-3 w-3 shrink-0" />
+            {cap.effective_display} · 降级
           </span>
         ) : (
           <>

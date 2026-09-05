@@ -104,7 +104,7 @@ def test_get_daily_isolates_failed_batch() -> None:
     # 3 批都请求过 (失败批重试 1 次后跳过、流程继续), 返回第 1、3 批共 4 行
     assert calls == [["s1", "s2"], ["s3", "s4"], ["s3", "s4"], ["s5", "s6"]]
     assert df.height == 4
-    assert set(df["symbol"]) == {"s1", "s2", "s5", "s6"}
+    assert set(df["symbol"]) == {"S1", "S2", "S5", "S6"}
 
 
 def test_get_daily_progress_callback_fires_for_failed_batch() -> None:

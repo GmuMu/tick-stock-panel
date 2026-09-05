@@ -1539,9 +1539,14 @@ export interface CapabilityRoute {
   desc: string
   field: ProviderField | null                    // null = 不可路由能力 (仅 TickFlow 提供)
   default: string
+  priority: number                                  // 数字越小越重要
   tf_tier: string                                  // TickFlow 所需最低订阅档位
   tf_available: boolean                            // 当前 TickFlow 档位是否提供该能力
   usable: boolean                                  // 生效源当前能否真正提供 (各页能力门控的统一判定)
+  status: 'USABLE' | 'DEGRADED' | 'UNAVAILABLE'  // 能力聚合状态
+  health: 'healthy' | 'degraded' | 'unavailable' // 当前生效源健康状态
+  provider: string                                 // 当前生效源标识
+  source: string                                   // 当前生效源展示名
   current: string                                  // 原始偏好值
   current_display: string
   effective: string                                // 当前生效源 (独立路由, current 即生效)
@@ -1931,6 +1936,13 @@ export const api = {
       final_sync_done?: boolean
       final_sync_failed?: string | null
       last_fetch_ms: number | null
+      realtime_route?: {
+        dataset: string
+        requested_provider: string
+        effective_provider: string
+        fallback: boolean
+        fallback_reason: string | null
+      }
     }>('/api/intraday/status'),
   quoteInterval: () =>
     request<{ interval: number; min_interval: number; max_interval: number }>(

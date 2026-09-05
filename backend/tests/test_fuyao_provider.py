@@ -402,6 +402,31 @@ def test_probe_api_key_invalid_key(monkeypatch):
     assert ok is False and "无效" in reason
 
 
+def test_probe_api_key_reports_revoked_or_unavailable_key(monkeypatch):
+    _patch_client_cls(
+        monkeypatch,
+        _FakeClient([[]], 0, error=fc.FuyaoError(
+            "扶摇接口错误 code=2003: Invalid or revoked API key"
+        )),
+    )
+    ok, reason = fp.probe_api_key("sk-no-snapshot-permission")
+    assert ok is False
+    assert "code=2003" in reason
+    assert "无效或已撤销" in reason
+    assert "控制台" in reason
+    assert "Key 无效或网络失败" not in reason
+
+
+def test_probe_api_key_keeps_network_failure_message(monkeypatch):
+    _patch_client_cls(
+        monkeypatch,
+        _FakeClient([[]], 0, error=fc.FuyaoError("网络请求失败: timeout")),
+    )
+    ok, reason = fp.probe_api_key("sk-network-error")
+    assert ok is False
+    assert reason == "Key 无效或网络失败: 网络请求失败: timeout"
+
+
 def test_loader_probe_plugin_key_dispatch(monkeypatch):
     import app.plugins.fuyao.provider as provider_mod
     from app.data_providers.custom import loader

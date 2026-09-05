@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 
 import polars as pl
 
-from app.data_providers.base import AssetType
+from app.data_providers.base import AssetType, ProviderRoute
 from app.indicators.pipeline import filter_halt_days
 from app.market_time import CN_TZ, cn_now, cn_today
 from app.services import preferences
@@ -23,6 +23,13 @@ from app.tickflow.rate_limits import chunked, resolve_limit, sleep_between_batch
 from app.tickflow.repository import KlineRepository, replace_with_retry
 
 logger = logging.getLogger(__name__)
+
+
+def _copy_route_provenance(out: dict | None, route: ProviderRoute) -> None:
+    """Copy serializable route evidence into an optional caller-owned dict."""
+    if out is not None:
+        out.clear()
+        out.update(route.provenance())
 
 
 def _atomic_write_parquet(df: pl.DataFrame, out) -> None:
@@ -160,6 +167,7 @@ def sync_and_persist_daily_batch(
     start_date: datetime | None = None,
     end_date: datetime | None = None,
     on_chunk_done: Callable[[int, int], None] | None = None,
+    provenance_out: dict | None = None,
 ) -> int:
     """批量同步日 K 并落到 Parquet。返回写入的行数。
 
@@ -170,10 +178,10 @@ def sync_and_persist_daily_batch(
         return 0
 
     provider_name = preferences.get_daily_data_provider()
-    if provider_name != "tickflow":
-        from app.data_providers import custom as custom_sources
-        if custom_sources.provider_has_dataset(provider_name, "daily"):
-            provider = custom_sources.get_provider(provider_name)
+    route = _resolve_provider_route(provider_name, "daily")
+    if route.provider is not None:
+        provider = route.provider
+        try:
             end_time = end_date or datetime.now()
             days = count or 365
             start_time = start_date or (end_time - timedelta(days=days))
@@ -183,6 +191,12 @@ def sync_and_persist_daily_batch(
                 end_time=end_time,
                 on_chunk_done=on_chunk_done,
             )
+        except Exception as e:  # noqa: BLE001
+            route = route.with_fallback("provider_call_failed", error=str(e))
+            logger.warning("custom daily provider %s call failed, falling back to TickFlow: %s",
+                           provider_name, e)
+        else:
+            _copy_route_provenance(provenance_out, route)
             if df.is_empty():
                 return 0
             repo.append_daily(df)
@@ -195,7 +209,11 @@ def sync_and_persist_daily_batch(
             except Exception as e:  # noqa: BLE001
                 logger.warning("refresh view failed: %s", e)
             return df.height
-        # 自定义源未配置 daily → 回退 TickFlow
+
+    _copy_route_provenance(provenance_out, route)
+    if route.fallback and route.error is not None:
+        logger.warning("custom daily provider %s resolution failed, falling back to TickFlow: %s",
+                       provider_name, route.error)
 
     if not capset.has(Cap.KLINE_DAILY_BATCH):
         return 0
@@ -234,8 +252,6 @@ def sync_daily_by_quotes(repo: KlineRepository) -> int:
     一个请求覆盖 ~5500 只股票,比 batch K-line 快几个数量级。
     返回写入的行数。
     """
-    from datetime import date as _date
-
     from app.tickflow.client import get_client
 
     tf = get_client()
@@ -251,7 +267,6 @@ def sync_daily_by_quotes(repo: KlineRepository) -> int:
 
     records = []
     for q in resp:
-        ext = q.get("ext") or {}
         records.append({
             "symbol": q.get("symbol"),
             "open": q.get("open"),
@@ -328,7 +343,8 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                     start_time: datetime | None = None,
                     end_time: datetime | None = None,
                     on_chunk_done: Callable[[int, int], None] | None = None,
-                    asset_type: str = "stock") -> tuple[int, list[str]]:
+                    asset_type: str = "stock",
+                    provenance_out: dict | None = None) -> tuple[int, list[str]]:
     """同步除权因子(Starter+)。SDK 接口:`tf.klines.ex_factors(symbols=...)`。
 
     支持增量: 传 start_time/end_time 只拉取该时间范围内的新除权事件。
@@ -338,10 +354,10 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
         return 0, []
 
     provider_name = preferences.get_adj_factor_provider()
-    if provider_name != "tickflow":
-        from app.data_providers import custom as custom_sources
-        if custom_sources.provider_has_dataset(provider_name, "adj_factor"):
-            provider = custom_sources.get_provider(provider_name)
+    route = _resolve_provider_route(provider_name, "adj_factor")
+    if route.provider is not None:
+        provider = route.provider
+        try:
             new_data = provider.get_adj_factors(
                 symbols,
                 start_time=start_time,
@@ -349,6 +365,12 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                 asset_type=asset_type,
                 on_chunk_done=on_chunk_done,
             )
+        except Exception as e:  # noqa: BLE001
+            route = route.with_fallback("provider_call_failed", error=str(e))
+            logger.warning("custom adj_factor provider %s call failed, falling back to TickFlow: %s",
+                           provider_name, e)
+        else:
+            _copy_route_provenance(provenance_out, route)
             if new_data.is_empty():
                 return 0, []
             affected = new_data["symbol"].unique().to_list()
@@ -365,7 +387,11 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                 return merged.height - before, affected
             _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
             return new_data.height, affected
-        # 自定义源未配置 adj_factor → 回退 TickFlow
+
+    _copy_route_provenance(provenance_out, route)
+    if route.fallback and route.error is not None:
+        logger.warning("custom adj_factor provider %s resolution failed, falling back to TickFlow: %s",
+                       provider_name, route.error)
 
     if not capset.has(Cap.ADJ_FACTOR):
         return 0, []
@@ -661,6 +687,13 @@ def _write_minute_partition(df: pl.DataFrame, minute_dir) -> int:
     return written
 
 
+def _resolve_provider_route(provider_name: str, dataset: str):
+    """Resolve a provider through the shared capability router boundary."""
+    from app.data_providers import custom as custom_sources
+
+    return custom_sources.resolve_route(provider_name, dataset)
+
+
 def _resolve_minute_provider(
     provider_name: str,
 ) -> tuple[object | None, bool, str | None]:
@@ -677,16 +710,10 @@ def _resolve_minute_provider(
     上层依据 error_msg 决定是否 logger.warning (区分"未配"与"异常")。
     注意: provider.get_minute() 仍由调用方在自身 try 块内调用 (业务异常, 非解析异常)。
     """
-    if provider_name == "tickflow":
-        return (None, True, None)
-    from app.data_providers import custom as custom_sources
-    try:
-        if not custom_sources.provider_has_dataset(provider_name, "minute"):
-            return (None, True, None)
-        provider = custom_sources.get_provider(provider_name)
-        return (provider, False, None)
-    except Exception as e:  # noqa: BLE001
-        return (None, True, str(e))
+    route = _resolve_provider_route(provider_name, "minute")
+    # Keep the historical helper contract: ``True`` means the caller should
+    # use TickFlow, including the normal TickFlow preference (not a fallback).
+    return (route.provider, route.requested_provider == "tickflow" or route.fallback, route.error)
 
 
 def _try_custom_minute(
@@ -696,6 +723,7 @@ def _try_custom_minute(
     asset_type: AssetType,
     freq: str = "1m",
     on_chunk_done: Callable[[int, int, str], None] | None = None,
+    provenance_out: dict | None = None,
 ) -> tuple[pl.DataFrame | None, bool]:
     """尝试从自定义分钟源拉取。返回 (df, should_fallback_to_tickflow)。
 
@@ -717,11 +745,17 @@ def _try_custom_minute(
     默认 seg_label="custom" 转发给上层, 保证进度展示不降级。
     """
     provider_name = preferences.get_minute_data_provider()
-    provider, fallback, err = _resolve_minute_provider(provider_name)
-    if fallback:
-        if err is not None:
+    route = _resolve_provider_route(provider_name, "minute")
+    if route.fallback:
+        if provenance_out is not None:
+            provenance_out.clear()
+            provenance_out.update(route.provenance())
+        if route.error is not None:
             logger.warning("custom minute provider %s resolution failed, falling back to TickFlow: %s",
-                           provider_name, err)
+                           provider_name, route.error)
+        return (None, True)
+    provider = route.provider
+    if provider is None:
         return (None, True)
 
     # 包装 on_chunk_done: provider 调 2 参 → 补 seg_label="custom" → 转发上层 3 参
@@ -737,6 +771,10 @@ def _try_custom_minute(
             asset_type=asset_type, freq=freq, on_chunk_done=wrapped_cb,
         )
     except Exception as e:
+        route = route.with_fallback("provider_call_failed", error=str(e))
+        if provenance_out is not None:
+            provenance_out.clear()
+            provenance_out.update(route.provenance())
         logger.warning("custom minute provider %s call failed, falling back to TickFlow: %s",
                        provider_name, e)
         return (None, True)
@@ -744,9 +782,16 @@ def _try_custom_minute(
         # 时区契约守卫: 插件/自定义源帧同样收口为北京墙钟 (CONTRIBUTING §3.3)
         df = _enforce_minute_beijing_wallclock(df, source=provider_name)
     except Exception as e:
+        route = route.with_fallback("provider_contract_failed", error=str(e))
+        if provenance_out is not None:
+            provenance_out.clear()
+            provenance_out.update(route.provenance())
         logger.warning("custom minute provider %s datetime 契约校验失败, falling back to TickFlow: %s",
                        provider_name, e)
         return (None, True)
+    if provenance_out is not None:
+        provenance_out.clear()
+        provenance_out.update(route.provenance())
     return (df, False)
 
 
@@ -822,7 +867,6 @@ def sync_minute_batch(
             seg_label = f"{cur_start.strftime('%m-%d')}~{cur_end.strftime('%m-%d')}"
         else:
             seg_label = "最新"
-        seg_total = len(time_segments)
         chunks = chunked(symbols, batch_size)
         for i, chunk in enumerate(chunks):
             sleep_between_batches(step, rpm)
@@ -1075,22 +1119,15 @@ def _resolve_full_minute_provider(
 
     与 _resolve_minute_provider 同构, 仅数据集名不同。
     """
-    if provider_name == "tickflow":
-        return (None, True, None)
-    from app.data_providers import custom as custom_sources
-    try:
-        if not custom_sources.provider_has_dataset(provider_name, "full_minute"):
-            return (None, True, None)
-        provider = custom_sources.get_provider(provider_name)
-        return (provider, False, None)
-    except Exception as e:  # noqa: BLE001
-        return (None, True, str(e))
+    route = _resolve_provider_route(provider_name, "full_minute")
+    return (route.provider, route.requested_provider == "tickflow" or route.fallback, route.error)
 
 
 def fetch_intraday_custom_batch(
     provider: object,
     provider_name: str,
     symbols: list[str],
+    provenance_out: dict | None = None,
 ) -> tuple[pl.DataFrame, int]:
     """自定义源全量分钟修复轮: 当日窗口全市场批量拉取 (不落盘)。
 
@@ -1101,6 +1138,11 @@ def fetch_intraday_custom_batch(
     帧统一过北京墙钟守卫 (与 _try_custom_minute 同纪律)。
     返回 (当日分钟K, 请求数); 失败返回空 df 由调用方按空轮处理。
     """
+    route = ProviderRoute(
+        dataset="full_minute",
+        requested_provider=provider_name,
+        effective_provider=provider_name,
+    )
     try:
         method = getattr(provider, "get_intraday_batch", None)
         if callable(method):
@@ -1120,13 +1162,18 @@ def fetch_intraday_custom_batch(
             )
             requests = counted["requests"]
     except Exception as e:  # noqa: BLE001
+        route = route.with_fallback("provider_call_failed", error=str(e))
+        _copy_route_provenance(provenance_out, route)
         logger.warning("custom full_minute batch via %s failed: %s", provider_name, e)
         return (pl.DataFrame(), 0)
     try:
         df = _enforce_minute_beijing_wallclock(df, source=provider_name)
     except Exception as e:  # noqa: BLE001
+        route = route.with_fallback("provider_contract_failed", error=str(e))
+        _copy_route_provenance(provenance_out, route)
         logger.warning("custom full_minute datetime 契约校验失败 (%s): %s", provider_name, e)
         return (pl.DataFrame(), 0)
+    _copy_route_provenance(provenance_out, route)
     return (df, max(requests, 1))
 
 
@@ -1135,6 +1182,7 @@ def fetch_intraday_custom_latest(
     provider_name: str,
     *,
     count: int = 3,
+    provenance_out: dict | None = None,
 ) -> tuple[pl.DataFrame, int] | None:
     """自定义源全量分钟稳态增量轮 (不落盘)。
 
@@ -1142,19 +1190,29 @@ def fetch_intraday_custom_latest(
     count 根分钟K, 尽量单请求/低请求量 (TickFlow 的 intraday.universe 同义)。
     未实现返回 None — 调用方降级为仅修复轮模式。失败返回 (空 df, 0) 按空轮处理。
     """
+    route = ProviderRoute(
+        dataset="full_minute",
+        requested_provider=provider_name,
+        effective_provider=provider_name,
+    )
     method = getattr(provider, "get_intraday_latest", None)
     if not callable(method):
         return None
     try:
         df = method(count=count)
     except Exception as e:  # noqa: BLE001
+        route = route.with_fallback("provider_call_failed", error=str(e))
+        _copy_route_provenance(provenance_out, route)
         logger.warning("custom full_minute latest via %s failed: %s", provider_name, e)
         return (pl.DataFrame(), 0)
     try:
         df = _enforce_minute_beijing_wallclock(df, source=provider_name)
     except Exception as e:  # noqa: BLE001
+        route = route.with_fallback("provider_contract_failed", error=str(e))
+        _copy_route_provenance(provenance_out, route)
         logger.warning("custom full_minute datetime 契约校验失败 (%s): %s", provider_name, e)
         return (pl.DataFrame(), 0)
+    _copy_route_provenance(provenance_out, route)
     return (df, 1)
 
 

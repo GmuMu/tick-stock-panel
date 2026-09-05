@@ -65,6 +65,23 @@ def test_matrix_without_third_party_sources(monkeypatch):
         assert cap["usable"] is True
         assert cap["pending"] == []
         assert cap["current"] == cap["effective"] == "tickflow"
+        assert cap["health"] == "healthy"
+        assert cap["status"] == "USABLE"
+        assert isinstance(cap["priority"], int)
+
+
+def test_capability_status_contract_is_stable(monkeypatch):
+    """Every capability exposes the plan-level provider/source health contract."""
+    _fake_sources(monkeypatch, [])
+    matrix = build_capability_matrix(dict(DEFAULT_CURRENT), tickflow_tier="free")
+    priorities = []
+    for cap in matrix["capabilities"]:
+        priorities.append(cap["priority"])
+        assert cap["provider"] == cap["effective"]
+        assert cap["source"] == cap["effective_display"]
+        assert cap["health"] in {"healthy", "degraded", "unavailable"}
+        assert cap["status"] in {"USABLE", "DEGRADED", "UNAVAILABLE"}
+    assert len(priorities) == len(set(priorities))
 
 
 def test_candidates_only_available_unready_goes_pending(monkeypatch):
@@ -117,6 +134,8 @@ def test_current_tickflow_unmet_tier_flagged(monkeypatch):
     assert cap["current"] == cap["effective"] == "tickflow"
     assert cap["tf_available"] is False
     assert cap["usable"] is False
+    assert cap["health"] == "unavailable"
+    assert cap["status"] == "UNAVAILABLE"
     assert [c["name"] for c in cap["candidates"]] == []
 
 
@@ -149,6 +168,8 @@ def test_usable_follows_effective_provider(monkeypatch):
     minute = caps["minute"]
     assert [c["name"] for c in minute["candidates"]] == ["fuyao"]
     assert minute["usable"] is False
+    assert minute["health"] == "degraded"
+    assert minute["status"] == "DEGRADED"
     # 除权默认路由 tickflow: 自身档位门槛 (starter+) 生效, free 档不可用
     # (独立路由, 不再随日K联动)
     assert caps["adj_factor"]["effective"] == "tickflow"
@@ -236,6 +257,48 @@ def test_unknown_current_display_falls_back_to_name(monkeypatch):
     assert caps["realtime"]["current"] == "ghost"
     assert caps["realtime"]["current_display"] == "ghost"
     assert caps["realtime"]["effective_display"] == "ghost"
+    assert caps["realtime"]["health"] == "degraded"
+    assert caps["realtime"]["status"] == "DEGRADED"
+
+
+def test_usable_source_with_non_ok_status_is_degraded(monkeypatch):
+    """A source can remain routable while its health is degraded."""
+    _fake_sources(
+        monkeypatch,
+        [{"name": "fuyao", "display_name": "fuyao", "datasets": ["realtime"],
+          "available": True, "status": "最近请求失败, 使用缓存"}],
+    )
+    cap = _by_id(
+        build_capability_matrix(
+            dict(DEFAULT_CURRENT, realtime_data_provider="fuyao"),
+            tickflow_tier="none",
+        ),
+    )["realtime"]
+    assert cap["usable"] is True
+    assert cap["provider"] == "fuyao"
+    assert cap["health"] == "degraded"
+    assert cap["status"] == "DEGRADED"
+
+
+def test_api_matrix_includes_full_minute_route(monkeypatch):
+    """The HTTP boundary must inject every registered routing preference."""
+    from app.api import settings as settings_api
+    from app.services import preferences
+    from app.tickflow import policy
+
+    _fake_sources(
+        monkeypatch,
+        [],
+        [{"name": "myfm", "display_name": "MyFM", "datasets": ["full_minute"]}],
+    )
+    monkeypatch.setattr(preferences, "get_full_minute_data_provider", lambda: "myfm")
+    monkeypatch.setattr(policy, "base_tier_name", lambda: "pro")
+
+    cap = _by_id(settings_api.get_capability_matrix())["full_minute"]
+    assert cap["effective"] == "myfm"
+    assert cap["provider"] == "myfm"
+    assert cap["source"] == "MyFM"
+    assert cap["usable"] is True
 
 
 def test_full_minute_routable_like_other_capabilities(monkeypatch):
