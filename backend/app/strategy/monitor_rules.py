@@ -24,6 +24,7 @@ from pathlib import Path
 from app.services.fs_utils import atomic_write_text
 from app.strategy.custom_signals import ALLOWED_FIELDS
 from app.strategy.intraday_signals import uses_intraday_signals
+from app.strategy.watch_scope import WATCH_SCOPE_CONTRACT_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,14 @@ def validate(rule: dict) -> None:
         raise ValueError("规则 name 不能为空")
     if rule.get("type") not in RULE_TYPES:
         raise ValueError(f"type 必须是 {RULE_TYPES} 之一")
+    scope_contract_version = rule.get(
+        "scope_contract_version",
+        WATCH_SCOPE_CONTRACT_VERSION,
+    )
+    if scope_contract_version != WATCH_SCOPE_CONTRACT_VERSION:
+        raise ValueError(
+            f"scope_contract_version 不受支持: {scope_contract_version!r}"
+        )
 
     # 指数规则: 仅 signal/price + symbols 作用域 + 不含分时信号
     # (指数无涨跌停/策略/封单语义; 无本地分钟K, 分时信号会静默不触发)
@@ -330,6 +339,7 @@ def normalize(rule: dict) -> dict:
     r = dict(rule)
     r.setdefault("enabled", True)
     r.setdefault("asset_type", "stock")
+    r.setdefault("scope_contract_version", WATCH_SCOPE_CONTRACT_VERSION)
     # sector/abnormal 默认全市场 (sector 随后强制 all; abnormal 支持指定标的)
     r.setdefault("scope", "all" if r.get("type") in {"sector", "abnormal", "volume_delta"} else "symbols")
     r.setdefault("symbols", [])

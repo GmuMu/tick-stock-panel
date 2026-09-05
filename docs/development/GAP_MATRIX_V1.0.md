@@ -1,6 +1,6 @@
 # Development Plan V1.0 GAP Matrix
 
-校准日期：2026-09-05
+校准日期：2026-09-06
 仓库：`tick-stock-panel`
 基线：`25e5680`
 当前分支：`feat/0301-indicator-spec`
@@ -74,7 +74,7 @@
 
 | Task | 状态 | 真实证据 / 入口 | 下一步 |
 | --- | --- | --- | --- |
-| TASK-0601 | PARTIAL | `MonitorRuleEngine` 已支持 symbols、all、watchlist_group 等 scope | 固化 Watch Scope 版本和失效语义 |
+| TASK-0601 | DONE | `strategy/watch_scope.py` 提供版本化 `WatchScope`；规则、引擎、API 和事件统一携带 scope snapshot；自选分组 revision 变化按标的精确失效，空/删除/读取失败均 fail-closed；33 个监控回归通过 | 进入 `TASK-0602`，补 rolling watch 独立状态契约 |
 | TASK-0602 | PARTIAL | 监控引擎已有 cooldown、状态和持久化触发记录 | 对 rolling watch 做独立状态契约 |
 | TASK-0603 | PARTIAL | `intraday_signals`、异动监控和监控规则已有信号路径 | 补 resonance 的输入/输出及去重测试 |
 | TASK-0604 | PARTIAL | `monitor_rules` API、`MonitorRuleEngine`、SSE 与触发记录已存在 | 将计划 DSL 与现有规则兼容收敛，禁止第二套告警引擎 |

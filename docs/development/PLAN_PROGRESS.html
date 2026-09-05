@@ -176,7 +176,7 @@
     <div id="empty" class="empty">没有匹配的任务。可以换一个关键词或筛选条件。</div>
 
     <footer class="footer">
-      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；Phase 5 已完成，下一步进入 Phase 6 <code>TASK-0601</code>。
+      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；Phase 5 已完成，<code>TASK-0601 Watch Scope</code> 已完成，下一步进入 <code>TASK-0602</code>。
     </footer>
   </main>
 
@@ -214,7 +214,7 @@
       ["Phase 5", "回测与市场规则", "TASK-0503", "Validation Gate", "done", "对区间、数据覆盖、分钟精度和策略输入做 fail-closed 校验。", "backend/app/backtest/contracts.py; backend/app/api/backtest.py; backend/app/backtest/factor.py; docs/tasks/TASK-0503-validation-gate.md", "已完成：结果、HTTP 守卫和 SSE 错误均返回统一 validation code，并保留旧 error/message。", "feat/0503-validation-gate"],
       ["Phase 5", "回测与市场规则", "TASK-0504", "Backtest Provenance", "done", "记录数据、指标、策略、参数和结果的完整来源链。", "backend/app/backtest/contracts.py; backend/app/backtest/worker.py; backend/app/backtest/strategy.py; backend/app/backtest/factor.py; docs/tasks/TASK-0504-backtest-provenance.md", "已完成：策略、因子、旧信号、批量和 worker lineage 均可序列化记录。", "feat/0504-backtest-provenance"],
 
-      ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0601", "Watch Scope", "partial", "统一全市场、标的、自选分组和动态作用域。", "strategy/monitor.py::MonitorRuleEngine", "固化 scope 版本和失效语义。", "feat/0601-watch-scope"],
+      ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0601", "Watch Scope", "done", "统一全市场、标的、自选分组和动态作用域。", "backend/app/strategy/watch_scope.py; backend/app/strategy/monitor.py; backend/app/api/monitor_rules.py; backend/tests/test_watch_scope_contract.py; docs/tasks/TASK-0601-watch-scope.md", "已完成：WatchScope 版本化快照、来源 revision、失效原因和按标的精确状态失效已落地；33 个监控回归通过。", "feat/0601-watch-scope"],
       ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0602", "Rolling Watch", "partial", "实现滚动观察窗口、状态迁移和跨轮询去重。", "MonitorRuleEngine cooldown/state", "补 rolling watch 独立状态契约。", "feat/0602-rolling-watch"],
       ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0603", "Resonance", "partial", "统一多信号共振、触发窗口和边缘状态。", "intraday_signals.py; abnormal moves; monitor rules", "补 resonance 输入、输出和去重测试。", "feat/0603-resonance"],
       ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0604", "Alert Rule", "partial", "统一监控 DSL、条件、冷却、状态和触发记录。", "api/monitor_rules.py; strategy/monitor.py", "与现有规则兼容收敛，不建第二套引擎。", "feat/0604-alert-rule"],
@@ -334,7 +334,7 @@
       document.getElementById("percent").textContent = `${percent.toFixed(1)}%`;
       document.querySelector(".ring").style.setProperty("--progress", `${percent}%`);
       document.getElementById("summary-title").textContent = `${counts.done}/${tasks.length} 个任务已完成`;
-      document.getElementById("summary-text").textContent = `当前阶段：TASK-0601 · Watch Scope。TASK-0501 至 TASK-0504 已完成；TASK-0401 至 TASK-0405 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
+      document.getElementById("summary-text").textContent = `当前阶段：TASK-0602 · Rolling Watch。TASK-0501 至 TASK-0504 已完成；TASK-0601 Watch Scope 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
     }
 
     document.querySelectorAll("[data-filter]").forEach(button => {

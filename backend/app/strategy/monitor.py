@@ -26,6 +26,7 @@ from app.strategy import config as _strategy_config
 from app.strategy.custom_signals import _OP_BUILDERS  # type: ignore  # 复用运算符构造器
 from app.strategy.intraday_signals import INTRADAY_SIGNAL_LABELS, uses_intraday_signals
 from app.strategy.monitor_rules import date_rule_in_window
+from app.strategy.watch_scope import WatchScope, resolve_watch_scope
 
 logger = logging.getLogger(__name__)
 
@@ -235,58 +236,6 @@ class StrategyMonitorService:
 _SIGNAL_PREFIXES = ("signal_", "csg_")
 
 
-# ── 自选分组作用域: group_id → 成员集合解析 (进程内缓存) ────
-# 缓存按 watchlist 数据版本号失效: 版本不变时零磁盘 IO; 自选页任何增删
-# 分组/成员的操作都会 bump 版本号, 下一轮评估立即拿到新成员 (无需等 TTL)。
-_group_cache_lock = threading.Lock()
-_group_cache: dict[str, Any] = {}
-# 已告警过的「分组已删除」(rule_id, group_id), 防止每轮评估刷日志
-_warned_missing_groups: set[tuple[str, str]] = set()
-
-
-def _watchlist_groups_snapshot() -> dict[str, frozenset[str]]:
-    """返回 {group_id: 成员symbol集}。读前后版本一致才写缓存, 避免缓存住写竞态下的旧数据。"""
-    from app.services import watchlist
-
-    rev_before = watchlist.revision()
-    with _group_cache_lock:
-        cached = _group_cache.get("groups")
-        if cached is not None and _group_cache.get("_rev") == rev_before:
-            return cached
-    groups: dict[str, set[str]] = {g["id"]: set() for g in watchlist.list_groups()}
-    for row in watchlist.list_symbols():
-        for gid in row.get("group_ids") or []:
-            members = groups.get(gid)
-            if members is not None:
-                members.add(str(row["symbol"]))
-    frozen = {gid: frozenset(syms) for gid, syms in groups.items()}
-    if watchlist.revision() == rev_before:
-        with _group_cache_lock:
-            _group_cache["_rev"] = rev_before
-            _group_cache["groups"] = frozen
-    return frozen
-
-
-def _group_members_or_none(rule: dict) -> frozenset[str] | None:
-    """解析规则绑定的分组成员; 分组已删除返回 None, 解析异常返回 None 并记日志。"""
-    group_id = str(rule.get("group_id") or "")
-    try:
-        groups = _watchlist_groups_snapshot()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("自选分组数据读取失败, 规则 %s 本轮跳过: %s", rule.get("id"), exc)
-        return None
-    members = groups.get(group_id)
-    if members is None:
-        key = (str(rule.get("id") or ""), group_id)
-        if key not in _warned_missing_groups:
-            _warned_missing_groups.add(key)
-            logger.warning(
-                "监控规则 %s 绑定的自选分组 %s 已删除, 本轮跳过 (fail-closed, 恢复分组后自动生效)",
-                rule.get("id"), group_id,
-            )
-    return members
-
-
 def _is_signal_field(field: str) -> bool:
     return any(field.startswith(p) for p in _SIGNAL_PREFIXES)
 
@@ -372,6 +321,9 @@ class MonitorRuleEngine:
         # abnormal 规则边缘触发状态: (rule_id, symbol) → 上一轮是否已达阈值。
         # 只在 False → True 跳变时告警 (首轮观测不触发, 防止新建规则瞬间刷屏)。
         self._abnormal_condition_state: dict[tuple[str, str], bool] = {}
+        # 每条规则最近一次解析出的作用域快照。动态分组 revision 变化时,
+        # 只失效离开作用域的标的状态, 避免整组 cooldown 被无条件清空。
+        self._scope_snapshots: dict[str, WatchScope] = {}
 
     def set_strategy_engine(self, engine) -> None:
         """注入 StrategyEngine, type=strategy 规则据此跑选股。"""
@@ -393,6 +345,7 @@ class MonitorRuleEngine:
         self._building_strategy_results = {}
         self._latest_strategy_result_ids.clear()
         self._active_matrix_snapshots.clear()
+        self._scope_snapshots.clear()
 
     def set_history_loader(self, fn) -> None:
         """注入历史窗口加载器, 用于声明 filter_history 的策略跑实时监控。
@@ -425,6 +378,81 @@ class MonitorRuleEngine:
         """
         self._name_map = name_map or {}
 
+    def _clear_rule_runtime_state(self, rule_id: str) -> None:
+        """清除一条规则的去重、边缘和策略池状态。"""
+        self._last_fire = {
+            key: value for key, value in self._last_fire.items()
+            if key[0] != rule_id
+        }
+        self._strategy_pools = {
+            key: value for key, value in self._strategy_pools.items()
+            if key[0] != rule_id
+        }
+        self._strategy_signal_state = {
+            key: value for key, value in self._strategy_signal_state.items()
+            if key[0] != rule_id
+        }
+        self._strategy_signal_seen = {
+            key: value for key, value in self._strategy_signal_seen.items()
+            if key[0] != rule_id
+        }
+        self._sector_condition_state = {
+            key: value for key, value in self._sector_condition_state.items()
+            if key[0] != rule_id
+        }
+        self._abnormal_condition_state = {
+            key: value for key, value in self._abnormal_condition_state.items()
+            if key[0] != rule_id
+        }
+
+    def _resolve_scope(self, rule: dict) -> WatchScope:
+        """Resolve and reconcile one rule's scope before evaluation."""
+        scope = resolve_watch_scope(rule)
+        rule_id = str(rule.get("id", ""))
+        previous = self._scope_snapshots.get(rule_id)
+        if previous is not None and previous.scope_version != scope.scope_version:
+            if previous.status != "active" or scope.status != "active":
+                self._clear_rule_runtime_state(rule_id)
+            elif previous.scope != "all" or scope.scope != "all":
+                removed = set(previous.symbols) - set(scope.symbols)
+                if removed:
+                    self._last_fire = {
+                        key: value
+                        for key, value in self._last_fire.items()
+                        if not (key[0] == rule_id and key[1] in removed)
+                    }
+                    self._strategy_pools = {
+                        key: (value - removed if key[0] == rule_id else value)
+                        for key, value in self._strategy_pools.items()
+                    }
+                    self._strategy_signal_state = {
+                        key: (
+                            value[0],
+                            value[1] - removed,
+                        ) if key[0] == rule_id else value
+                        for key, value in self._strategy_signal_state.items()
+                    }
+                    self._strategy_signal_seen = {
+                        key: value
+                        for key, value in self._strategy_signal_seen.items()
+                        if not (key[0] == rule_id and key[-1] in removed)
+                    }
+                    self._abnormal_condition_state = {
+                        key: value
+                        for key, value in self._abnormal_condition_state.items()
+                        if not (key[0] == rule_id and key[1] in removed)
+                    }
+        self._scope_snapshots[rule_id] = scope
+        return scope
+
+    @staticmethod
+    def _attach_scope(events: list[dict], scope: WatchScope) -> list[dict]:
+        """Attach the immutable-at-evaluation scope snapshot to alert events."""
+        payload = scope.to_dict()
+        for event in events:
+            event["watch_scope"] = payload
+        return events
+
     # ── 规则管理 ───────────────────────────────────────
     @staticmethod
     def _rule_state_signature(rule: dict) -> tuple[Any, ...]:
@@ -436,6 +464,8 @@ class MonitorRuleEngine:
             rule.get("asset_type", "stock"),
             rule.get("scope", "symbols"),
             tuple(sorted(str(symbol) for symbol in rule.get("symbols", []))),
+            rule.get("group_id"),
+            rule.get("scope_contract_version", "1.0"),
             rule.get("sector"),
             rule.get("sector_kind"),
             tuple(sorted(str(target.get("key")) for target in rule.get("sector_targets", []))),
@@ -493,18 +523,33 @@ class MonitorRuleEngine:
             for key, value in list(self._abnormal_condition_state.items())
             if key[0] in active_ids
         }
+        self._scope_snapshots = {
+            key: value for key, value in self._scope_snapshots.items()
+            if key in active_ids
+        }
         logger.info("MonitorRuleEngine: 装载 %d 条规则", len(self._rules))
         self._rules_version += 1
 
     def add_rule(self, rule: dict) -> None:
+        previous = self._rules.get(rule["id"])
         if rule.get("enabled") is not False:
             self._rules[rule["id"]] = rule
+            if (
+                previous is not None
+                and self._rule_state_signature(previous)
+                != self._rule_state_signature(rule)
+            ):
+                self._clear_rule_runtime_state(rule["id"])
+                self._scope_snapshots.pop(rule["id"], None)
         else:
             self._rules.pop(rule["id"], None)
+            self._scope_snapshots.pop(rule["id"], None)
+            self._clear_rule_runtime_state(rule["id"])
         self._rules_version += 1
 
     def remove_rule(self, rule_id: str) -> None:
         self._rules.pop(rule_id, None)
+        self._scope_snapshots.pop(rule_id, None)
         self._last_fire = {k: v for k, v in list(self._last_fire.items()) if k[0] != rule_id}
         self._strategy_pools = {
             k: v for k, v in list(self._strategy_pools.items()) if k[0] != rule_id
@@ -518,15 +563,20 @@ class MonitorRuleEngine:
         self._sector_condition_state = {
             k: v for k, v in self._sector_condition_state.items() if k[0] != rule_id
         }
+        self._abnormal_condition_state = {
+            k: v for k, v in self._abnormal_condition_state.items() if k[0] != rule_id
+        }
         self._rules_version += 1
 
     def clear(self) -> None:
         self._rules.clear()
+        self._scope_snapshots.clear()
         self._last_fire.clear()
         self._strategy_pools.clear()
         self._strategy_signal_state.clear()
         self._strategy_signal_seen.clear()
         self._sector_condition_state.clear()
+        self._abnormal_condition_state.clear()
         self._rules_version += 1
 
     @property
@@ -730,6 +780,9 @@ class MonitorRuleEngine:
         for rule in list(self._rules.values()):
             if rule.get("type") != "date" or rule.get("enabled") is False:
                 continue
+            scope = self._resolve_scope(rule)
+            if not scope.is_active:
+                continue
             remind = rule.get("remind_date") or ""
             if not date_rule_in_window(remind, int(rule.get("lead_days", 0)), today_iso):
                 continue
@@ -770,6 +823,7 @@ class MonitorRuleEngine:
                 "severity": rule.get("severity", "info"),
                 "conditions": [],
                 "logic": "and",
+                "watch_scope": scope.to_dict(),
             }
             events.append(ev)
             if self._alert_handler:
@@ -967,21 +1021,15 @@ class MonitorRuleEngine:
 
     def _evaluate_abnormal_rule(self, rule: dict, rows: list[dict], now: float) -> list[dict]:
         events: list[dict] = []
+        scope = self._resolve_scope(rule)
+        if not scope.is_active:
+            return events
         threshold = float(rule.get("threshold_pct", 70)) / 100
         if not 0 < threshold <= 1.5:
             threshold = 0.7
         direction = rule.get("direction", "both")
         window_filter = str(rule.get("abnormal_window", "any"))
-        if rule.get("scope") == "symbols":
-            scope_symbols = {str(s) for s in rule.get("symbols", []) if s}
-        elif rule.get("scope") == "watchlist_group":
-            # 异动规则同样支持动态分组; 分组已删除返回 None → 本轮整体跳过
-            members = _group_members_or_none(rule)
-            if members is None:
-                return events
-            scope_symbols = set(members)
-        else:
-            scope_symbols = None
+        scope_symbols = set(scope.symbols) if scope.scope != "all" else None
 
         seen: set[str] = set()
         for row in rows:
@@ -1034,6 +1082,7 @@ class MonitorRuleEngine:
                 "severity": rule.get("severity", "info"),
                 "conditions": [],
                 "logic": "and",
+                "watch_scope": scope.to_dict(),
                 "abnormal_window": best[0],
                 "abnormal_value": round(best[2], 4),
                 "abnormal_threshold": best[3],
@@ -1067,7 +1116,8 @@ class MonitorRuleEngine:
     def _evaluate_rule(self, df: pl.DataFrame, rule: dict, now: float) -> list[dict]:
         """评估单条规则,返回触发的 events。"""
         # 1. 按 scope 过滤作用域
-        scoped = self._apply_scope(df, rule)
+        scope = self._resolve_scope(rule)
+        scoped = self._apply_scope(df, rule, scope)
         if scoped.is_empty():
             return []
 
@@ -1081,10 +1131,10 @@ class MonitorRuleEngine:
             hit_rows = self._match_strategy(scoped, rule)
         elif rtype == "ladder":
             # 连板梯队封单监控: 独立处理 (需带预警封单值, 走专属 message)
-            return self._evaluate_ladder(scoped, rule, now)
+            return self._attach_scope(self._evaluate_ladder(scoped, rule, now), scope)
         elif rtype == "volume_delta":
             # 轮询放量监控: 相邻两次全市场快照的成交量差值, 独立处理走专属 message
-            return self._evaluate_volume_delta(scoped, rule, now)
+            return self._attach_scope(self._evaluate_volume_delta(scoped, rule, now), scope)
         else:
             # signal / price / market: 通用条件匹配
             for sym, name, price, pct, hit_sigs in self._match_conditions(scoped, rule):
@@ -1139,6 +1189,7 @@ class MonitorRuleEngine:
                 # 「命中了什么条件」。strategy 类型靠策略选股池 diff, 不写条件。
                 "conditions": list(rule.get("conditions", [])) if rtype != "strategy" else [],
                 "logic": rule.get("logic", "and") if rtype != "strategy" else "and",
+                "watch_scope": scope.to_dict(),
             }
             events.append(ev)
             if self._alert_handler:
@@ -1150,32 +1201,18 @@ class MonitorRuleEngine:
         return events
 
     @staticmethod
-    def _apply_scope(df: pl.DataFrame, rule: dict) -> pl.DataFrame:
+    def _apply_scope(
+        df: pl.DataFrame,
+        rule: dict,
+        scope_snapshot: WatchScope | None = None,
+    ) -> pl.DataFrame:
         """按 scope 过滤 DataFrame。"""
-        scope = rule.get("scope", "symbols")
-        if scope == "all":
+        scope = scope_snapshot or resolve_watch_scope(rule)
+        if scope.scope == "all" and scope.is_active:
             return df
-        if scope == "symbols":
-            syms = rule.get("symbols", [])
-            if not syms:
-                return df.head(0)
-            return df.filter(pl.col("symbol").is_in(syms))
-        if scope == "watchlist_group":
-            # 动态绑定自选分组: 每轮评估按分组当前成员过滤 (带版本号缓存)。
-            # 分组已删除/暂时为空 → fail-closed 返回空, 绝不退化为全市场。
-            members = _group_members_or_none(rule)
-            if not members:
-                return df.head(0)
-            return df.filter(pl.col("symbol").is_in(list(members)))
-        if scope == "sector":
-            # sector 过滤需 df 含板块列 (后续接入 ext_data JOIN)。在 JOIN 落地前
-            # fail-closed 返回空 —— 绝不退化为「全市场」误触发 (旧行为 return df 会让
-            # 一条板块规则对全市场每只命中都告警)。新建 sector 规则已在 validate 拦截,
-            # 此处兜底任何历史遗留的 sector 规则。
-            logger.warning("scope=sector 规则 %s 暂不支持(板块 JOIN 未实现), 本轮跳过",
-                           rule.get("id"))
+        if not scope.is_active or "symbol" not in df.columns:
             return df.head(0)
-        return df
+        return df.filter(pl.col("symbol").is_in(list(scope.symbols)))
 
     def _match_strategy(
         self, df: pl.DataFrame, rule: dict,

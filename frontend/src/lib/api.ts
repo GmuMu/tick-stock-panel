@@ -878,12 +878,27 @@ export interface AbnormalIntradayPayload {
   rows?: AbnormalIntradayRow[]
 }
 
+export interface WatchScope {
+  contract_version: string
+  scope_version: string
+  scope: 'symbols' | 'all' | 'watchlist_group' | string
+  asset_type: 'stock' | 'etf' | 'index' | string
+  rule_id?: string | null
+  symbols: string[]
+  group_id?: string | null
+  source: 'rule' | 'market_universe' | 'watchlist' | string
+  source_revision?: number | null
+  status: 'active' | 'empty' | 'invalid' | string
+  reason_code?: string | null
+}
+
 export interface MonitorRule {
   id: string
   name: string
   enabled: boolean
   type: 'strategy' | 'signal' | 'price' | 'market' | 'ladder' | 'sector' | 'abnormal' | 'volume_delta' | 'date'
   asset_type?: 'stock' | 'etf' | 'index'
+  scope_contract_version?: string
   scope: 'symbols' | 'all' | 'sector' | 'watchlist_group'
   symbols: string[]
   /** scope=watchlist_group 时绑定的自选分组 id (成员动态解析, 增删自选自动生效) */
@@ -911,6 +926,7 @@ export interface MonitorRule {
   webhook_channels?: string[]  // 命中时推送的外部渠道 (合法值 'feishu' | 'wecom')
   created_at?: string
   runtime_warning?: string
+  watch_scope?: WatchScope
   // ladder 专属: 封单监控; volume_delta 复用 metric 表示阈值口径 (volume=手数, amount=金额)
   metric?: 'sealed_vol' | 'sealed_amount' | 'volume' | 'amount'
   threshold?: number                        // 封单 <= 此值时报警

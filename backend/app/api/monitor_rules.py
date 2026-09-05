@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from app.strategy import monitor_rules
 from app.strategy.intraday_signals import INTRADAY_SIGNAL_LABELS, uses_intraday_signals
+from app.strategy.watch_scope import WATCH_SCOPE_CONTRACT_VERSION, resolve_watch_scope
 
 router = APIRouter(prefix="/api/monitor-rules", tags=["monitor-rules"])
 
@@ -79,6 +80,7 @@ class RuleModel(BaseModel):
     enabled: bool = True
     type: str          # strategy | signal | price | market | sector | abnormal
     asset_type: str = "stock"   # stock | etf (etf: strategy 型走 ETF 历史加载器)
+    scope_contract_version: str = WATCH_SCOPE_CONTRACT_VERSION
     scope: str = "symbols"   # symbols | all | sector | watchlist_group
     symbols: list[str] = []
     # watchlist_group 作用域: 绑定的自选分组 id (成员动态解析, 增删自选自动生效)
@@ -177,6 +179,7 @@ def get_options(request: Request):
             {"key": "all", "label": "全市场"},
             {"key": "sector", "label": "板块"},
         ],
+        "watch_scope_contract_version": WATCH_SCOPE_CONTRACT_VERSION,
         "logics": [
             {"key": "and", "label": "全部满足 (AND)"},
             {"key": "or", "label": "任一满足 (OR)"},
@@ -252,6 +255,18 @@ def list_rules(request: Request):
                     rule["runtime_warning"] = "绑定的自选分组已删除, 规则已暂停监控, 编辑可重新选择"
         except Exception:  # noqa: BLE001
             pass
+    for rule in rules:
+        scope = resolve_watch_scope(rule)
+        rule["watch_scope"] = scope.to_dict()
+        if scope.status == "invalid":
+            reason_text = {
+                "EMPTY_SYMBOLS": "指定标的为空",
+                "MISSING_GROUP_ID": "未绑定自选分组",
+                "GROUP_NOT_FOUND": "绑定的自选分组已删除",
+                "GROUP_SOURCE_ERROR": "自选分组暂时无法读取",
+                "UNSUPPORTED_SCOPE": "作用域版本或类型不受支持",
+            }.get(scope.reason_code or "", "作用域不可用")
+            rule.setdefault("runtime_warning", f"作用域不可用: {reason_text}")
     # 按 created_at 倒序
     rules.sort(key=lambda r: r.get("created_at", ""), reverse=True)
     return {"rules": rules}
@@ -343,7 +358,11 @@ def save_rule(req: RuleModel, request: Request):
             )
     monitor_rules.save_one(_data_dir(request), rule)
     _sync_engine(request)
-    return {"ok": True, "rule": rule}
+    return {
+        "ok": True,
+        "rule": rule,
+        "watch_scope": resolve_watch_scope(rule).to_dict(),
+    }
 
 
 # ── 删除 ───────────────────────────────────────────────
