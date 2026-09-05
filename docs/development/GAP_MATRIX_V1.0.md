@@ -56,10 +56,10 @@
 | Task | 状态 | 真实证据 / 入口 | 下一步 |
 | --- | --- | --- | --- |
 | TASK-0401 | DONE | `strategy/contract.py` 提供版本化 `StrategyContract`、生命周期、输入特征和执行 provenance；`StrategyEngine` 与策略 API 已统一接入；`tests/test_strategy_contract.py` 覆盖普通、矩阵、分钟、叠加和 reload 隔离 | 进入 `TASK-0402`，统一候选模型与来源字段 |
-| TASK-0402 | PARTIAL | `StrategyResult`、`backtest.candidates`、研究候选 API 已存在 | 统一候选模型与来源字段 |
-| TASK-0403 | PARTIAL | `strategy_cache`、策略结果和候选库已存在；缺少计划定义的 EOD seed 契约 | 明确 seed 输入、日期和数据质量 |
-| TASK-0404 | PARTIAL | `jobs.daily_pipeline`、`pipeline` API、调度器已存在 | EOD runner 只编排标准服务，补任务状态与 provenance |
-| TASK-0405 | PARTIAL | 策略加载、删除、AI/组合目录已有生命周期处理 | 补稳定 ID、发布/停用/回滚的正式状态机 |
+| TASK-0402 | DONE | `strategy/candidates.py` 提供稳定 `StrategyCandidate`/`StrategyCandidateBatch`、candidate/seed ID、评分、信号和 provenance；`StrategyEngine.run()` 与 screener API 已统一暴露；`tests/test_phase4_execution.py` 覆盖序列化与排序 | 进入 `TASK-0403`，固化每日 EOD seed |
+| TASK-0403 | DONE | `services/eod_seeds.py` 提供原子 JSON 存储、同 seed 幂等和冲突保护；`GET /api/strategies/seeds` 提供策略/日期查询；候选批次携带版本、日期、来源和 `DataQuality` | 进入 `TASK-0404`，接入盘后编排 |
+| TASK-0404 | DONE | `services/eod_runner.py` 复用 `ScreenerService`/`StrategyEngine`；`daily_pipeline.run_now` 在刷新视图后执行 `run_eod_seeds`，阶段失败进入 `stage_errors`；手动 EOD API 已接入 | 进入 `TASK-0405`，完成生命周期状态机 |
+| TASK-0405 | DONE | `strategy/lifecycle.py` 提供持久化状态机、历史和源码 revision；策略 API 支持生命周期、复制、删除、revision 列表与回滚；非 active 策略 fail-closed；接口级回滚失败恢复测试已覆盖 | Phase 4 完成，进入 Phase 5 `TASK-0501` |
 
 ## Phase 5：回测与市场规则
 
@@ -157,7 +157,7 @@
 
 ## 执行结论
 
-1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0205`、`TASK-0301` 至 `TASK-0304` 和 `TASK-0401` 已完成，当前分支为 `feat/0301-indicator-spec`；下一步进入 Phase 4 `TASK-0402`，Sequoia-X 的 `PrivatePlacement` 因公司行为数据缺口暂不实现。
+1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0205`、`TASK-0301` 至 `TASK-0304` 和 `TASK-0401` 至 `TASK-0405` 已完成，当前分支为 `feat/0301-indicator-spec`；下一步进入 Phase 5 `TASK-0501`，Sequoia-X 的 `PrivatePlacement` 因公司行为数据缺口暂不实现。
 2. `full_minute` YAML 解析断点仍是已确认缺口，依赖它的自定义全量分钟任务不得宣称端到端完成。
 3. 交易、OMS、QMT 和实盘相关任务全部保持 `GAP/BLOCKED`，在没有风险、幂等、审计和 Kill Switch 之前不接真实交易。
 4. 以后每个 Task 必须先补契约测试，再实现代码；完成后更新对应 `docs/tasks/TASK-xxxx-*.md`，不以“页面能打开”代替验收。

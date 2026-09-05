@@ -677,6 +677,34 @@ def run_now(
     emit("refresh_views", 95, "刷新 DuckDB 视图…")
     _refresh_views(repo)
 
+    # Step 4: EOD strategy seeds. This is an orchestration stage only; data
+    # loading and strategy execution stay in their existing services.
+    eod_seed_result: dict | None = None
+    app_state = _get_app_state()
+    strategy_engine = getattr(app_state, "strategy_engine", None) if app_state else None
+    if strategy_engine is not None:
+        try:
+            emit("run_eod_seeds", 97, "生成策略候选种子…")
+            from app.services.eod_runner import run_eod_seeds
+
+            eod_seed_result = run_eod_seeds(
+                repo,
+                strategy_engine,
+                repo.store.data_dir,
+            )
+            emit(
+                "run_eod_seeds",
+                99,
+                f"候选种子完成,{eod_seed_result['seeds']} 个策略"
+                f",{eod_seed_result['candidates']} 个候选",
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("run_eod_seeds failed: %s", e)
+            stage_errors.append(f"run_eod_seeds: {e}")
+            emit("run_eod_seeds", 99, f"候选种子失败:{e}")
+    else:
+        skipped.append("run_eod_seeds")
+
     emit("done", 100, "完成")
     _invalidate(None)  # 兜底:全清
 
@@ -698,6 +726,7 @@ def run_now(
         "integrity_issues": len(integrity_issues),
         "skipped_stages": skipped,
         "stage_errors": stage_errors,
+        "eod_seed": eod_seed_result,
     }
 
     # 有阶段软失败: 进度协议已走完(done/100, 前端进度条正常收尾), 但数据可能陈旧,

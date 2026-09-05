@@ -26,6 +26,8 @@ from app.strategy.contract import (
     execution_provenance,
     normalize_contract,
 )
+from app.strategy.candidates import CANDIDATE_MODEL_VERSION, batch_from_result
+from app.strategy.lifecycle import StrategyLifecycleStore
 from app.strategy.scoring import (
     SCORING_DIRECTION_LOW,
     effective_scoring,
@@ -238,6 +240,8 @@ class StrategyResult:
     contract_version: str = "1.0"
     strategy_version: str = "1.0.0"
     provenance: dict[str, Any] = field(default_factory=dict)
+    candidate_model_version: str = CANDIDATE_MODEL_VERSION
+    candidates: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -256,6 +260,7 @@ class StrategyEngine:
         strategy_dirs: list[Path] | None = None,
         *,
         override_loader: Callable[[str], dict] | None = None,
+        lifecycle_store: StrategyLifecycleStore | None = None,
     ):
         self._strategies: dict[str, StrategyDef] = {}
         self._load_errors: list[dict] = []  # 加载失败的策略 [{file, error}]
@@ -266,6 +271,7 @@ class StrategyEngine:
         # 保证 composite 内跑子策略与单独跑子策略使用同一口径(CONTRIBUTING §5.1)。
         # None 时(测试/无 data_dir) 子策略用默认参数, 不报错。
         self._override_loader = override_loader
+        self._lifecycle_store = lifecycle_store
         self._load_all(retain_previous_on_error=False)
 
     # ================================================================
@@ -285,6 +291,7 @@ class StrategyEngine:
                     continue
                 try:
                     s = self._load_file(f)
+                    s = self._apply_persisted_lifecycle(s)
                     strategy_id = str(s.meta["id"])
                     if strategy_id in duplicate_ids:
                         errors.append({
@@ -334,6 +341,28 @@ class StrategyEngine:
         for strategy_id, strategy in candidates.items():
             logger.debug("loaded strategy: %s (%s)", strategy_id, strategy.source)
         return not errors
+
+    def _apply_persisted_lifecycle(self, strategy: StrategyDef) -> StrategyDef:
+        """Apply persisted lifecycle state without changing strategy code."""
+        if self._lifecycle_store is None:
+            return strategy
+        default = "research" if strategy.meta.get("research_only") else "active"
+        # Loading must be side-effect free.  Persisting an implicit default here
+        # could mutate lifecycle state even when a later strategy reload fails.
+        state = self._lifecycle_store.get(str(strategy.meta["id"]), default).get(
+            "state", default
+        )
+        if state == strategy.meta.get("lifecycle"):
+            return strategy
+        meta = {**strategy.meta, "lifecycle": state}
+        contract = strategy.contract
+        if contract is not None:
+            contract = replace(
+                contract,
+                lifecycle=state,
+                provenance={**contract.provenance, "lifecycle": state},
+            )
+        return replace(strategy, meta=meta, contract=contract)
 
     def load_errors(self) -> list[dict]:
         """返回最近一次 _load_all 中加载失败的策略 [{file, error}]。"""
@@ -689,6 +718,36 @@ class StrategyEngine:
             raise ValueError(f"unknown strategy: {strategy_id}")
         return s
 
+    def set_lifecycle(self, strategy_id: str, state: str, *, reason: str = "") -> dict:
+        """Persist and apply a lifecycle transition to the live registry."""
+        if self._lifecycle_store is None:
+            raise ValueError("strategy lifecycle store is not configured")
+        current = self.get(strategy_id)
+        item = self._lifecycle_store.transition(
+            strategy_id,
+            state,
+            current_state=contract_for_strategy(current).lifecycle,
+            reason=reason,
+        )
+        updated = self._apply_persisted_lifecycle(current)
+        self._strategies = {**self._strategies, strategy_id: updated}
+        return item
+
+    def lifecycle(self, strategy_id: str) -> dict:
+        strategy = self.get(strategy_id)
+        if self._lifecycle_store is None:
+            return {
+                "strategy_id": strategy_id,
+                "state": contract_for_strategy(strategy).lifecycle,
+                "revision": 0,
+                "source_revision": 0,
+                "history": [],
+            }
+        return self._lifecycle_store.get(
+            strategy_id,
+            contract_for_strategy(strategy).lifecycle,
+        )
+
     def has(self, strategy_id: str) -> bool:
         return strategy_id in self._strategies
 
@@ -949,6 +1008,11 @@ class StrategyEngine:
     ) -> StrategyResult:
         """Execute a strategy and attach the normalized contract provenance."""
         strategy = self.get(strategy_id)
+        if contract_for_strategy(strategy).lifecycle != "active":
+            raise ValueError(
+                f"strategy {strategy_id} lifecycle is "
+                f"{contract_for_strategy(strategy).lifecycle!r}; only active strategies can run"
+            )
         result = self._run(
             strategy_id,
             context,
@@ -960,6 +1024,9 @@ class StrategyEngine:
         result.contract_version = contract.contract_version
         result.strategy_version = contract.strategy_version
         result.provenance = execution_provenance(strategy, context, result.as_of)
+        batch = batch_from_result(result)
+        result.candidate_model_version = batch.model_version
+        result.candidates = [item.to_dict() for item in batch.candidates]
         return result
 
     def _run(

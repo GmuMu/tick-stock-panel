@@ -244,6 +244,8 @@ def strategies(
             continue
         if timeframe not in meta.get("timeframes", ["1d"]):
             continue
+        if meta.get("lifecycle", "active") != "active":
+            continue
         sid = meta["id"]
         overrides = strategy_config.load_override(data_dir, sid)
         presets.append({
@@ -581,6 +583,9 @@ def run_all(request: Request, body: Optional[dict] = None):
             "total": result.total,
             "as_of": str(as_of),
             "rows": safe_rows,
+            "candidate_model_version": getattr(result, "candidate_model_version", "1.0"),
+            "candidates": getattr(result, "candidates", []),
+            "provenance": getattr(result, "provenance", {}),
         }
 
     elapsed = (time.perf_counter() - t_total) * 1000

@@ -23,7 +23,9 @@ from app.strategy import config as strategy_config
 from app.strategy.ai_generator import AIStrategyGenerator, find_meta_assignment
 from app.strategy.contract import contract_for_strategy
 from app.strategy.engine import StrategyDef, StrategyEngine
+from app.strategy.lifecycle import StrategyLifecycleError, StrategyLifecycleStore
 from app.strategy.monitor import StrategyMonitorService
+from app.services.eod_seeds import EODSeedStore
 from app.strategy.prompt_builder import build_step1, build_step2
 from app.strategy.scoring import (
     SCORING_DIRECTIONS,
@@ -63,6 +65,26 @@ def _get_monitor(request: Request) -> StrategyMonitorService:
 
 def _data_dir(request: Request) -> Path:
     return request.app.state.repo.store.data_dir
+
+
+def _lifecycle_store(request: Request) -> StrategyLifecycleStore:
+    store = getattr(request.app.state, "strategy_lifecycle_store", None)
+    if store is None:
+        store = StrategyLifecycleStore(_data_dir(request))
+        request.app.state.strategy_lifecycle_store = store
+    return store
+
+
+def _activate_created_strategy(store: StrategyLifecycleStore, strategy_id: str) -> None:
+    """Make a newly created source runnable, including after archive/recreate."""
+    item = store.register(strategy_id, "active")
+    if item.get("state") != "active":
+        store.transition(
+            strategy_id,
+            "active",
+            current_state=str(item.get("state")),
+            reason="source_created",
+        )
 
 
 def _invalidate_strategy_runtime(request: Request) -> None:
@@ -303,6 +325,23 @@ class StrategyCompositeSaveRequest(BaseModel):
     mode: Literal["create", "update"] = "create"
 
 
+class StrategyLifecycleRequest(BaseModel):
+    state: Literal["draft", "active", "disabled", "archived", "research"]
+    reason: str = ""
+
+
+class StrategyCopyRequest(BaseModel):
+    strategy_id: str
+    new_strategy_id: str
+    target_source: Literal["ai", "custom"] = "custom"
+    name: str = ""
+    description: str = ""
+
+
+class StrategyRollbackRequest(BaseModel):
+    revision: int
+
+
 class MonitorStartRequest(BaseModel):
     strategy_id: str
 
@@ -333,6 +372,141 @@ def list_strategies(
         overrides = all_overrides.get(sid)
         result.append(_strategy_detail(s, overrides, engine))
     return {"strategies": result, "load_errors": engine.load_errors()}
+
+
+@router.get("/seeds")
+def list_eod_seeds(request: Request, strategy_id: str | None = None, as_of: date | None = None):
+    """Return persisted EOD candidate seeds for review and later backtests."""
+    engine = _get_engine(request)
+    if strategy_id:
+        _get_public_strategy(engine, strategy_id)
+    return {
+        "items": EODSeedStore(_data_dir(request)).list(
+            strategy_id=strategy_id,
+            as_of=as_of.isoformat() if as_of else None,
+        )
+    }
+
+
+@router.post("/eod/run")
+def run_eod_seed_job(request: Request, as_of: date | None = None):
+    """Run the EOD candidate seed stage without repeating data synchronization."""
+    engine = _get_engine(request)
+    from app.services.eod_runner import run_eod_seeds
+
+    try:
+        return run_eod_seeds(
+            request.app.state.repo,
+            engine,
+            _data_dir(request),
+            as_of=as_of,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{strategy_id}/lifecycle")
+def get_strategy_lifecycle(strategy_id: str, request: Request):
+    engine = _get_engine(request)
+    _get_public_strategy(engine, strategy_id)
+    return engine.lifecycle(strategy_id)
+
+
+@router.post("/{strategy_id}/lifecycle")
+def update_strategy_lifecycle(
+    strategy_id: str,
+    req: StrategyLifecycleRequest,
+    request: Request,
+):
+    engine = _get_engine(request)
+    strategy = _get_public_strategy(engine, strategy_id)
+    if strategy.source == "builtin" and req.state not in {"active", "disabled", "research"}:
+        raise HTTPException(status_code=403, detail="内置策略不允许进入草稿或归档状态")
+    try:
+        result = engine.set_lifecycle(strategy_id, req.state, reason=req.reason)
+    except StrategyLifecycleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _invalidate_strategy_runtime(request)
+    return result
+
+
+@router.get("/{strategy_id}/revisions")
+def list_strategy_revisions(strategy_id: str, request: Request):
+    engine = _get_engine(request)
+    strategy = _get_public_strategy(engine, strategy_id)
+    return {
+        "strategy_id": strategy_id,
+        "current_revision": engine.lifecycle(strategy_id).get("source_revision", 0),
+        "revisions": _lifecycle_store(request).list_source_revisions(strategy_id),
+        "source": strategy.source,
+    }
+
+
+@router.post("/{strategy_id}/rollback")
+def rollback_strategy(strategy_id: str, req: StrategyRollbackRequest, request: Request):
+    engine = _get_engine(request)
+    strategy = _get_public_strategy(engine, strategy_id)
+    if strategy.source == "builtin" or strategy.file_path is None:
+        raise HTTPException(status_code=403, detail="内置策略不支持源码回滚")
+    lifecycle = _lifecycle_store(request)
+    try:
+        code = lifecycle.read_source_revision(strategy_id, req.revision)
+        prepared = _prepare_strategy_code(
+            StrategyCodeValidateRequest(code=code, strategy_id=strategy_id)
+        )
+        path = strategy.file_path
+        previous_code = path.read_text(encoding="utf-8")
+        path.write_text(prepared["code"], encoding="utf-8")
+        try:
+            engine.reload()
+            loaded = engine.get(strategy_id)
+            if loaded.file_path is None or loaded.file_path.resolve() != path.resolve():
+                raise ValueError("回滚后策略文件路径校验失败")
+            lifecycle.snapshot_source(
+                strategy_id,
+                prepared["code"],
+                version=loaded.contract.strategy_version if loaded.contract else "1.0.0",
+            )
+        except Exception:
+            path.write_text(previous_code, encoding="utf-8")
+            engine.reload()
+            raise
+    except StrategyLifecycleError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"策略回滚失败: {exc}") from exc
+    _invalidate_strategy_runtime(request)
+    return {
+        "ok": True,
+        "strategy_id": strategy_id,
+        "rolled_back_from": req.revision,
+        "current_revision": lifecycle.get(strategy_id).get("source_revision", 0),
+    }
+
+
+@router.post("/copy")
+def copy_strategy(req: StrategyCopyRequest, request: Request):
+    engine = _get_engine(request)
+    source_id = _validate_strategy_id(req.strategy_id)
+    target_id = _validate_strategy_id(req.new_strategy_id)
+    if source_id == target_id:
+        raise HTTPException(status_code=400, detail="复制目标 ID 必须不同于源策略")
+    source = _get_public_strategy(engine, source_id)
+    if source.file_path is None:
+        raise HTTPException(status_code=400, detail="源策略没有可复制的源码")
+    try:
+        code = source.file_path.read_text(encoding="utf-8")
+        save_req = StrategyCodeSaveRequest(
+            code=code,
+            strategy_id=target_id,
+            target_source=req.target_source,
+            mode="create",
+            name=req.name,
+            description=req.description,
+        )
+        return _save_strategy_code(save_req, request)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"策略复制失败: {exc}") from exc
 
 
 @router.get("/{strategy_id}")
@@ -758,6 +932,18 @@ def _save_strategy_code(req: StrategyCodeSaveRequest, request: Request, *, legac
                 "策略引用了未定义的自定义信号: " + ", ".join(sorted(missing))
                 + " — 请先在「自定义信号」管理中创建对应信号后再保存"
             )
+        lifecycle = _lifecycle_store(request)
+        if req.mode == "create":
+            _activate_created_strategy(lifecycle, sid)
+        else:
+            lifecycle.register(sid, "active")
+        lifecycle.snapshot_source(
+            sid,
+            prepared["code"],
+            version=(
+                loaded.contract.strategy_version if loaded.contract else "1.0.0"
+            ),
+        )
     except Exception as e:
         _restore_strategy_file(path, previous_code)
         engine.reload()
@@ -1029,6 +1215,12 @@ def _save_composite_strategy(req: StrategyCompositeSaveRequest, request: Request
             raise ValueError(f"策略来源异常: 期望 composite, 实际 {loaded.source}")
         if loaded.execution_backend != "composite":
             raise ValueError("策略后端异常: 期望 composite")
+        lifecycle = _lifecycle_store(request)
+        if req.mode == "create":
+            _activate_created_strategy(lifecycle, sid)
+        else:
+            lifecycle.register(sid, "active")
+        lifecycle.snapshot_source(sid, previous_code if previous_code is not None else code)
     except Exception as e:
         _restore_strategy_file(path, previous_code)
         engine.reload()
@@ -1118,6 +1310,14 @@ def delete_strategy(strategy_id: str, request: Request):
 
     # 删除只影响当前策略, 全量 reload 会让其他损坏或重复 ID 的文件阻塞本次删除。
     engine.unregister(strategy_id)
+    try:
+        _lifecycle_store(request).transition(
+            strategy_id,
+            "archived",
+            reason="source_deleted",
+        )
+    except StrategyLifecycleError as exc:
+        logger.warning("strategy %s lifecycle archive failed after delete: %s", strategy_id, exc)
     warnings = _cleanup_deleted_strategy(request, strategy_id)
     return {"ok": True, "warnings": warnings}
 

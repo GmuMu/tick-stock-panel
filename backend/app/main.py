@@ -230,6 +230,7 @@ async def _application_lifespan(app: FastAPI):
 
     # 策略引擎
     from app.strategy.engine import StrategyEngine
+    from app.strategy.lifecycle import StrategyLifecycleStore
     from app.strategy import config as strategy_config
     from app.strategy.monitor import StrategyMonitorService
     from app.services.screener import ScreenerService
@@ -245,8 +246,10 @@ async def _application_lifespan(app: FastAPI):
     strategy_engine = StrategyEngine(
         strategy_dirs=strategy_dirs,
         override_loader=lambda sid: strategy_config.load_override(store.data_dir, sid),
+        lifecycle_store=StrategyLifecycleStore(store.data_dir),
     )
     app.state.strategy_engine = strategy_engine
+    app.state.strategy_lifecycle_store = strategy_engine._lifecycle_store
     logger.info("strategy engine loaded: %d strategies", len(strategy_engine.list_strategies()))
 
     matrix_prewarm_owner = MatrixCachePrewarmOwner()

@@ -176,7 +176,7 @@
     <div id="empty" class="empty">没有匹配的任务。可以换一个关键词或筛选条件。</div>
 
     <footer class="footer">
-      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；<code>TASK-0401</code> 已完成，下一步进入 <code>TASK-0402</code>。
+      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；Phase 4 已完成，当前进入 <code>TASK-0501</code>。
     </footer>
   </main>
 
@@ -204,10 +204,10 @@
       ["Phase 3", "指标规范与增量一致性", "TASK-0304", "Incremental Parity", "done", "证明盘后 batch 与盘中 incremental 的指标结果一致。", "backend/app/indicators/pipeline.py; backend/app/tickflow/repository.py; backend/tests/test_indicator_incremental_parity.py; docs/tasks/TASK-0304-incremental-parity.md", "已完成：修正递推状态截断、样本方差和 close 极值口径；31 个相关回归通过。", "feat/0301-indicator-spec"],
 
       ["Phase 4", "策略合同与 EOD 执行", "TASK-0401", "Strategy Contract", "done", "统一策略元数据、输入、输出、版本、生命周期和来源。", "backend/app/strategy/contract.py; backend/app/strategy/engine.py::StrategyDef; backend/tests/test_strategy_contract.py; docs/tasks/TASK-0401-strategy-contract.md", "已完成：普通、矩阵、分钟、叠加策略统一合同；结果携带可序列化 provenance；52 个相关回归通过。", "feat/0401-strategy-contract"],
-      ["Phase 4", "策略合同与 EOD 执行", "TASK-0402", "Candidate Model", "partial", "统一策略候选、评分、来源和后续复测引用。", "StrategyResult; backtest/candidates.py", "统一候选模型与来源字段。", "feat/0402-candidate-model"],
-      ["Phase 4", "策略合同与 EOD 执行", "TASK-0403", "EOD Seeds", "partial", "定义每日策略种子、日期、输入快照和数据质量。", "strategy_cache.py; daily_pipeline.py", "明确 seed 输入、日期和 provenance。", "feat/0403-eod-seeds"],
-      ["Phase 4", "策略合同与 EOD 执行", "TASK-0404", "EOD Runner", "partial", "编排盘后数据、指标、策略和候选的执行任务。", "jobs/daily_pipeline.py; api/pipeline.py", "补任务状态与 provenance，不直接编排供应商。", "feat/0404-eod-runner"],
-      ["Phase 4", "策略合同与 EOD 执行", "TASK-0405", "Strategy Lifecycle", "partial", "处理策略创建、发布、停用、复制、删除和回滚。", "strategy/engine.py; api/strategy.py", "补稳定 ID 与生命周期状态机。", "feat/0405-strategy-lifecycle"],
+      ["Phase 4", "策略合同与 EOD 执行", "TASK-0402", "Candidate Model", "done", "统一策略候选、评分、来源和后续复测引用。", "backend/app/strategy/candidates.py; backend/app/strategy/engine.py; backend/app/api/screener.py; backend/tests/test_phase4_execution.py; docs/tasks/TASK-0402-candidate-model.md", "已完成：统一候选模型、稳定 candidate/seed ID、信号和 provenance。", "feat/0301-indicator-spec"],
+      ["Phase 4", "策略合同与 EOD 执行", "TASK-0403", "EOD Seeds", "done", "定义每日策略种子、日期、输入快照和数据质量。", "backend/app/services/eod_seeds.py; backend/app/api/strategy.py; backend/tests/test_phase4_execution.py; docs/tasks/TASK-0403-eod-seeds.md", "已完成：原子持久化、幂等/冲突保护和按策略/日期查询。", "feat/0301-indicator-spec"],
+      ["Phase 4", "策略合同与 EOD 执行", "TASK-0404", "EOD Runner", "done", "编排盘后数据、指标、策略和候选的执行任务。", "backend/app/services/eod_runner.py; backend/app/jobs/daily_pipeline.py; backend/app/api/strategy.py; docs/tasks/TASK-0404-eod-runner.md", "已完成：复用既有数据/策略服务，盘后生成候选种子并报告阶段失败。", "feat/0301-indicator-spec"],
+      ["Phase 4", "策略合同与 EOD 执行", "TASK-0405", "Strategy Lifecycle", "done", "处理策略创建、发布、停用、复制、删除和回滚。", "backend/app/strategy/lifecycle.py; backend/app/strategy/engine.py; backend/app/api/strategy.py; docs/tasks/TASK-0405-strategy-lifecycle.md", "已完成：生命周期状态机、源码 revision、复制、删除和安全回滚。", "feat/0301-indicator-spec"],
 
       ["Phase 5", "回测与市场规则", "TASK-0501", "Backtest Data", "partial", "统一回测数据加载、窗口、资产类型和时间可得性。", "backtest/engine.py; backtest/strategy.py", "补 data contract 和可得性证明。", "feat/0501-backtest-data"],
       ["Phase 5", "回测与市场规则", "TASK-0502", "CN Market Rules", "partial", "固化 T+1、涨跌停、费用、滑点和不可成交规则。", "price_limits.py; backtest/engine.py", "增加市场规则 golden fixtures。", "test/0502-cn-market-rules"],
@@ -334,7 +334,7 @@
       document.getElementById("percent").textContent = `${percent.toFixed(1)}%`;
       document.querySelector(".ring").style.setProperty("--progress", `${percent}%`);
       document.getElementById("summary-title").textContent = `${counts.done}/${tasks.length} 个任务已完成`;
-      document.getElementById("summary-text").textContent = `当前阶段：TASK-0402 · Candidate Model。TASK-0401 已完成；TASK-0301 至 TASK-0304 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
+      document.getElementById("summary-text").textContent = `当前阶段：TASK-0501 · Backtest Data。TASK-0401 至 TASK-0405 已完成；TASK-0301 至 TASK-0304 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
     }
 
     document.querySelectorAll("[data-filter]").forEach(button => {
