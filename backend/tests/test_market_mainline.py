@@ -137,6 +137,20 @@ class TestComputeMainline:
         assert sw["limit_up_count"] == 3
         assert sw["max_boards"] == 3
 
+    def test_missing_amount_uses_safe_leader_fallback(self, tmp_path, monkeypatch):
+        d1 = date(2024, 1, 2)
+        _write_enriched(tmp_path, [
+            {"symbol": "S1.SH", "date": d1, "consecutive_limit_ups": 1},
+            {"symbol": "S2.SH", "date": d1, "consecutive_limit_ups": 3},
+            {"symbol": "S3.SH", "date": d1, "consecutive_limit_ups": 2},
+        ])
+        _patch_map(monkeypatch, {"S1.SH": ["X"], "S2.SH": ["X"], "S3.SH": ["X"]})
+        out = market_mainline.compute_mainline_range(
+            _fake_repo(tmp_path), tmp_path, d1, d1, kind="concept",
+            filter_cfg={"min_members": 1, "max_members": 5000, "blacklist": []},
+        )
+        assert out.to_dicts()[0]["leader_symbol"] == "S2.SH"
+
 
 class TestMainlineFilterPreferences:
     def test_blacklist_string_parsing_and_clamp(self, tmp_path, monkeypatch):

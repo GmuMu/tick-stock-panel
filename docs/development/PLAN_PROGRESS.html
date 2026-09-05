@@ -176,7 +176,7 @@
     <div id="empty" class="empty">没有匹配的任务。可以换一个关键词或筛选条件。</div>
 
     <footer class="footer">
-      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；Phase 6 已完成，下一步进入 <code>TASK-0701</code>。
+      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；Phase 7 已完成，下一步进入 <code>TASK-0801</code>。
     </footer>
   </main>
 
@@ -220,10 +220,10 @@
       ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0604", "Alert Rule", "done", "统一监控 DSL、条件、冷却、状态和触发记录。", "backend/app/strategy/alert_rule.py; backend/app/strategy/monitor_rules.py; backend/app/api/monitor_rules.py; backend/app/strategy/monitor.py; docs/tasks/TASK-0604-alert-rule.md", "已完成：版本化 AlertRule 快照、旧规则兼容、保存 revision 和全告警入口快照已落地，未新增第二套引擎。", "feat/0604-alert-rule"],
       ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0605", "Alert Delivery", "done", "统一站内、语音、Webhook、飞书和企微投递状态。", "backend/app/services/alert_delivery.py; backend/app/services/webhook_adapter.py; backend/app/services/quote_service.py; backend/app/api/alerts.py; backend/tests/test_alert_delivery.py; docs/tasks/TASK-0605-alert-delivery.md", "已完成：渠道独立 queued/sent/failed/skipped 审计、规则 revision 关联、企微重试边界和诊断 API 已落地。", "feat/0605-alert-delivery"],
 
-      ["Phase 7", "Market Regime", "TASK-0701", "Market Regime", "partial", "统一情绪阶段、市场宽度、覆盖率和 partial 状态。", "services/market_phase.py; api/regime.py", "对齐 coverage/partial 与质量状态。", "feat/0701-market-regime"],
-      ["Phase 7", "Market Regime", "TASK-0702", "Breadth / Money Effect", "partial", "统一市场宽度、涨跌家数、资金效应和主线输入。", "market phase/mainline services", "统一输入数据源和缺失处理。", "feat/0702-breadth-money-effect"],
-      ["Phase 7", "Market Regime", "TASK-0703", "Regime Smoothing", "partial", "固化 EMA、确认天数和跨日状态。", "tests/test_market_phase.py; test_regime_builder.py", "补确定性 golden 与跨日状态。", "test/0703-regime-smoothing"],
-      ["Phase 7", "Market Regime", "TASK-0704", "Regime UI", "partial", "把阶段、覆盖率和数据质量在界面清楚展示。", "frontend Regime page", "优先用扩展 route/slot，不复制核心页面。", "feat/0704-regime-ui"],
+      ["Phase 7", "Market Regime", "TASK-0701", "Market Regime", "done", "统一情绪阶段、市场宽度、覆盖率和质量状态。", "backend/app/services/regime_builder.py; backend/app/api/regime.py; docs/tasks/TASK-0701-market-regime.md", "已完成：四个查询接口统一返回 DataQuality、source coverage、missing/stale 与 fail-closed 状态。", "feat/0701-market-regime"],
+      ["Phase 7", "Market Regime", "TASK-0702", "Breadth / Money Effect", "done", "统一市场宽度、涨跌家数、资金效应和主线输入。", "backend/app/services/regime_builder.py; backend/app/services/market_mainline.py; docs/tasks/TASK-0702-breadth-money-effect.md", "已完成：成交额加权涨跌、缺失降级和质量组件已落地。", "feat/0702-breadth-money-effect"],
+      ["Phase 7", "Market Regime", "TASK-0703", "Regime Smoothing", "done", "固化 EMA、确认天数和跨日状态。", "backend/app/services/market_phase.py; backend/app/services/regime_builder.py; backend/tests/test_market_phase.py; docs/tasks/TASK-0703-regime-smoothing.md", "已完成：stateful classifier、跨分片等价和原子 phase_state sidecar 已落地。", "test/0703-regime-smoothing"],
+      ["Phase 7", "Market Regime", "TASK-0704", "Regime UI", "done", "把阶段、覆盖率和数据质量在界面清楚展示。", "frontend/src/pages/Regime.tsx; frontend/src/lib/api.ts; docs/tasks/TASK-0704-regime-ui.md", "已完成：质量摘要、缺口提示、资金效应卡和资金评分曲线已接入现有 Regime 页面。", "feat/0704-regime-ui"],
 
       ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0801", "Transaction DB", "gap", "建立交易事件、计划、决定和审计的持久化边界。", "尚未发现 transaction DB 或交易事件模型。", "先选存储边界并写 ADR，再实现 schema。", "feat/0801-transaction-db"],
       ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0802", "Thesis", "gap", "保存研究论点、证据、反证和版本。", "尚未发现正式 Thesis 模块。", "依赖 0801，定义 Markdown/JSON 兼容。", "feat/0802-thesis"],
@@ -334,7 +334,7 @@
       document.getElementById("percent").textContent = `${percent.toFixed(1)}%`;
       document.querySelector(".ring").style.setProperty("--progress", `${percent}%`);
       document.getElementById("summary-title").textContent = `${counts.done}/${tasks.length} 个任务已完成`;
-      document.getElementById("summary-text").textContent = `当前阶段：TASK-0701 · Market Regime。TASK-0501 至 TASK-0504 已完成；Phase 6 的 TASK-0601 至 TASK-0605 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
+      document.getElementById("summary-text").textContent = `当前阶段：TASK-0801 · Transaction DB。Phase 7 的 TASK-0701 至 TASK-0704 已完成；Phase 6 的 TASK-0601 至 TASK-0605 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
     }
 
     document.querySelectorAll("[data-filter]").forEach(button => {

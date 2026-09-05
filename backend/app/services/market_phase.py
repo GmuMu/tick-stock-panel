@@ -20,10 +20,14 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict, dataclass
+from typing import Any
 
 import polars as pl
 
 logger = logging.getLogger(__name__)
+
+PHASE_CONTRACT_VERSION = "1.0"
 
 # ───────────────────────── 阶段词汇 ─────────────────────────
 PHASE_ICE = "ice"
@@ -84,6 +88,68 @@ _CONFIRM_DAYS = 2
 # 保证"主升"标签在大盘层面也成立; state 列缺失时(单元测试)不启用否决。
 _POSITIVE_PHASES = frozenset({PHASE_CLIMAX, PHASE_RALLY, PHASE_IGNITE})
 _VETO_STATES = frozenset({"weak", "lean_weak"})
+
+
+@dataclass(frozen=True)
+class PhaseSmoothingState:
+    """可跨批次/跨日恢复的阶段平滑状态。"""
+
+    contract_version: str
+    last_date: str | None
+    current_phase: str | None
+    pending_phase: str | None
+    pending_days: int
+    ema_height: float | None
+    ema_first_board: float | None
+    ema_ge2: float | None
+    ema_promo: float | None
+    ema_seal: float | None
+    first_height: float | None
+    first_ge2: float | None
+    recent_height: tuple[float, ...]
+    recent_ge2: tuple[float, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        result = asdict(self)
+        result["recent_height"] = list(self.recent_height)
+        result["recent_ge2"] = list(self.recent_ge2)
+        return result
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> PhaseSmoothingState:
+        """从 JSON 兼容地恢复状态, 非法/缺失字段由调用方拒绝。"""
+        return cls(
+            contract_version=str(value.get("contract_version", PHASE_CONTRACT_VERSION)),
+            last_date=value.get("last_date"),
+            current_phase=value.get("current_phase"),
+            pending_phase=value.get("pending_phase"),
+            pending_days=max(0, int(value.get("pending_days", 0))),
+            ema_height=_optional_float(value.get("ema_height")),
+            ema_first_board=_optional_float(value.get("ema_first_board")),
+            ema_ge2=_optional_float(value.get("ema_ge2")),
+            ema_promo=_optional_float(value.get("ema_promo")),
+            ema_seal=_optional_float(value.get("ema_seal")),
+            first_height=_optional_float(value.get("first_height")),
+            first_ge2=_optional_float(value.get("first_ge2")),
+            recent_height=_float_tuple(value.get("recent_height")),
+            recent_ge2=_float_tuple(value.get("recent_ge2")),
+        )
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if result != result else result
+
+
+def _float_tuple(value: Any) -> tuple[float, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(result for item in value if (result := _optional_float(item)) is not None)[-5:]
 
 
 def with_prev_consecutive(df: pl.DataFrame) -> pl.DataFrame:
@@ -169,87 +235,207 @@ def _ema(values: list[float], alpha: float = _EMA_ALPHA) -> list[float]:
     return out
 
 
-def classify_phase_series(daily: pl.DataFrame) -> pl.DataFrame:
-    """对完整日序打阶段标签, 追加 phase 列。
+def _ema_step(previous: float | None, value: float | None, seed: float) -> float:
+    value = value if value is not None else seed
+    if previous is None:
+        return value
+    return previous + _EMA_ALPHA * (value - previous)
 
-    输入列: date, max_consecutive, first_board, ge2_count, promo_rate, seal_rate
-    (promo_rate 允许 null)。处理: promo 前向填充 → 各驱动 EMA 平滑 →
-    逐日规则判定(按优先级) → 连续 _CONFIRM_DAYS 日同标签才切换(持续性)。
-    """
+
+def _classify_raw_phase(
+    *,
+    height: float,
+    first_board: float,
+    ge2: float,
+    promo: float,
+    seal: float,
+    previous_ge2: float,
+    previous_height: float,
+) -> str:
+    """按当前平滑值输出未确认的阶段标签。"""
+    if ge2 >= CLIMAX_GE2 or first_board >= CLIMAX_FIRST_BOARD:
+        return PHASE_CLIMAX
+    if height >= RALLY_HEIGHT and ge2 >= RALLY_GE2 and promo >= RALLY_PROMO:
+        return PHASE_RALLY
+    if promo >= RALLY_PROMO_ALT and ge2 >= RALLY_GE2_ALT and height >= RALLY_HEIGHT_ALT:
+        return PHASE_RALLY
+    if height <= ICE_HEIGHT and ge2 <= ICE_GE2 and first_board <= ICE_FIRST_BOARD:
+        return PHASE_ICE
+    from_high = previous_ge2 >= EBB_RECENT_GE2 or previous_height >= EBB_RECENT_HEIGHT
+    if from_high and (promo <= EBB_PROMO and ge2 < previous_ge2):
+        return PHASE_EBB
+    if promo <= EBB_PROMO_STRICT and seal <= EBB_SEAL:
+        return PHASE_EBB
+    if ge2 - previous_ge2 >= IGNITE_GE2_DELTA and ge2 >= IGNITE_GE2 and promo >= IGNITE_PROMO:
+        return PHASE_IGNITE
+    if (
+        height - previous_height >= IGNITE_HEIGHT_DELTA
+        and height >= IGNITE_HEIGHT
+        and promo >= IGNITE_PROMO_SOFT
+    ):
+        return PHASE_IGNITE
+    return PHASE_REPAIR
+
+
+def advance_phase_state(
+    previous: PhaseSmoothingState | None,
+    *,
+    date_value: str,
+    height: float | None,
+    first_board: float | None,
+    ge2: float | None,
+    promo: float | None,
+    seal: float | None,
+    state: str | None = None,
+) -> tuple[str, PhaseSmoothingState]:
+    """推进一天的阶段状态并返回当天标签与新状态。"""
+    if previous is not None and previous.last_date is not None and date_value <= previous.last_date:
+        raise ValueError(f"phase 日期必须递增: {date_value} <= {previous.last_date}")
+
+    seed_height = height if height is not None else (previous.ema_height if previous else 0.0) or 0.0
+    seed_first = (
+        first_board
+        if first_board is not None
+        else (previous.ema_first_board if previous else 0.0) or 0.0
+    )
+    seed_ge2 = ge2 if ge2 is not None else (previous.ema_ge2 if previous else 0.0) or 0.0
+    seed_promo = promo if promo is not None else (previous.ema_promo if previous else 0.0) or 0.0
+    seed_seal = seal if seal is not None else (previous.ema_seal if previous else 0.0) or 0.0
+
+    ema_height = _ema_step(previous.ema_height if previous else None, height, seed_height)
+    ema_first = _ema_step(previous.ema_first_board if previous else None, first_board, seed_first)
+    ema_ge2 = _ema_step(previous.ema_ge2 if previous else None, ge2, seed_ge2)
+    ema_promo = _ema_step(previous.ema_promo if previous else None, promo, seed_promo)
+    ema_seal = _ema_step(previous.ema_seal if previous else None, seal, seed_seal)
+
+    if previous is None:
+        previous_ge2 = ema_ge2
+        previous_height = ema_height
+        first_height = ema_height
+        first_ge2 = ema_ge2
+        recent_height: tuple[float, ...] = ()
+        recent_ge2: tuple[float, ...] = ()
+        current_phase = None
+        pending_phase = None
+        pending_days = 0
+    else:
+        previous_ge2 = (
+            previous.recent_ge2[-5]
+            if len(previous.recent_ge2) >= 5
+            else previous.first_ge2 if previous.first_ge2 is not None else ema_ge2
+        )
+        previous_height = (
+            previous.recent_height[-5]
+            if len(previous.recent_height) >= 5
+            else previous.first_height if previous.first_height is not None else ema_height
+        )
+        first_height = previous.first_height if previous.first_height is not None else ema_height
+        first_ge2 = previous.first_ge2 if previous.first_ge2 is not None else ema_ge2
+        recent_height = previous.recent_height
+        recent_ge2 = previous.recent_ge2
+        current_phase = previous.current_phase
+        pending_phase = previous.pending_phase
+        pending_days = previous.pending_days
+
+    raw = _classify_raw_phase(
+        height=ema_height,
+        first_board=ema_first,
+        ge2=ema_ge2,
+        promo=ema_promo,
+        seal=ema_seal,
+        previous_ge2=previous_ge2,
+        previous_height=previous_height,
+    )
+    if raw in _POSITIVE_PHASES and state in _VETO_STATES:
+        raw = PHASE_REPAIR
+
+    if current_phase is None:
+        current_phase = raw
+        pending_phase = None
+        pending_days = 0
+    elif raw == current_phase:
+        pending_phase = None
+        pending_days = 0
+    else:
+        if raw == pending_phase:
+            pending_days += 1
+        else:
+            pending_phase = raw
+            pending_days = 1
+        if pending_days >= _CONFIRM_DAYS:
+            current_phase = raw
+            pending_phase = None
+            pending_days = 0
+
+    next_state = PhaseSmoothingState(
+        contract_version=PHASE_CONTRACT_VERSION,
+        last_date=date_value,
+        current_phase=current_phase,
+        pending_phase=pending_phase,
+        pending_days=pending_days,
+        ema_height=ema_height,
+        ema_first_board=ema_first,
+        ema_ge2=ema_ge2,
+        ema_promo=ema_promo,
+        ema_seal=ema_seal,
+        first_height=first_height,
+        first_ge2=first_ge2,
+        recent_height=(*recent_height, ema_height)[-5:],
+        recent_ge2=(*recent_ge2, ema_ge2)[-5:],
+    )
+    return current_phase, next_state
+
+
+def classify_phase_series_with_state(
+    daily: pl.DataFrame,
+    initial_state: PhaseSmoothingState | None = None,
+) -> tuple[pl.DataFrame, PhaseSmoothingState | None]:
+    """按日序标注阶段, 并返回可用于下一批的平滑状态。"""
     required = {"date", "max_consecutive", "first_board", "ge2_count", "promo_rate", "seal_rate"}
     missing = required - set(daily.columns)
     if missing:
         raise ValueError(f"classify_phase_series 缺少列: {sorted(missing)}")
 
     rows = daily.sort("date")
-    n = rows.height
-    states = rows["state"].to_list() if "state" in rows.columns else None
-    height_s = _ema([float(v) if v is not None else None for v in rows["max_consecutive"].to_list()])
-    first_s = _ema([float(v) if v is not None else None for v in rows["first_board"].to_list()])
-    ge2_s = _ema([float(v) if v is not None else None for v in rows["ge2_count"].to_list()])
-    promo_s = _ema([float(v) if v is not None else None for v in rows["promo_rate"].to_list()])
-    seal_s = _ema([float(v) if v is not None else None for v in rows["seal_rate"].to_list()])
+    seeds: dict[str, float] = {}
+    for key in ("max_consecutive", "first_board", "ge2_count", "promo_rate", "seal_rate"):
+        seed = next(
+            (
+                float(value)
+                for value in rows[key].to_list()
+                if value is not None and float(value) == float(value)
+            ),
+            0.0,
+        )
+        seeds[key] = seed
 
-    def raw_label(i: int) -> str:
-        h, fb, g2, pr, sr = height_s[i], first_s[i], ge2_s[i], promo_s[i], seal_s[i]
-        g2_prev = ge2_s[max(0, i - 5)]
-        h_prev = height_s[max(0, i - 5)]
-        # 高潮
-        if g2 >= CLIMAX_GE2 or fb >= CLIMAX_FIRST_BOARD:
-            return PHASE_CLIMAX
-        # 主升
-        if h >= RALLY_HEIGHT and g2 >= RALLY_GE2 and pr >= RALLY_PROMO:
-            return PHASE_RALLY
-        if pr >= RALLY_PROMO_ALT and g2 >= RALLY_GE2_ALT and h >= RALLY_HEIGHT_ALT:
-            return PHASE_RALLY
-        # 冰点: 高度/宽度/首板同时贴地 — 优先于退潮(持续死寂的市场是"冰点"
-        # 而非"自高位退潮"; 退潮的规则 B 不带 from_high 条件, 顺序反了会把
-        # 长期冰点误标成退潮)
-        if h <= ICE_HEIGHT and g2 <= ICE_GE2 and fb <= ICE_FIRST_BOARD:
-            return PHASE_ICE
-        # 退潮: 自高位回落 + 晋级率坍塌, 或晋级/封板双弱
-        from_high = g2_prev >= EBB_RECENT_GE2 or h_prev >= EBB_RECENT_HEIGHT
-        if from_high and (pr <= EBB_PROMO and g2 < g2_prev):
-            return PHASE_EBB
-        if pr <= EBB_PROMO_STRICT and sr <= EBB_SEAL:
-            return PHASE_EBB
-        # 启动: 自低位扩张
-        if g2 - g2_prev >= IGNITE_GE2_DELTA and g2 >= IGNITE_GE2 and pr >= IGNITE_PROMO:
-            return PHASE_IGNITE
-        if h - h_prev >= IGNITE_HEIGHT_DELTA and h >= IGNITE_HEIGHT and pr >= IGNITE_PROMO_SOFT:
-            return PHASE_IGNITE
-        return PHASE_REPAIR
-
+    current_state = initial_state
     labels: list[str] = []
-    current = None
-    pending: str | None = None
-    pending_run = 0
-    for i in range(n):
-        raw = raw_label(i)
-        if (
-            states is not None
-            and raw in _POSITIVE_PHASES
-            and states[i] in _VETO_STATES
-        ):
-            raw = PHASE_REPAIR
-        if current is None:
-            current = raw
-            labels.append(raw)
-            continue
-        if raw == current:
-            labels.append(current)
-            pending, pending_run = None, 0
-            continue
-        if raw == pending:
-            pending_run += 1
-        else:
-            pending, pending_run = raw, 1
-        if pending_run >= _CONFIRM_DAYS:
-            current = raw
-            labels.append(current)
-            pending, pending_run = None, 0
-        else:
-            labels.append(current)
-    return daily.with_columns(
-        pl.Series("phase", labels, dtype=pl.Utf8).alias("phase")
-    ).sort("date")
+    for row in rows.iter_rows(named=True):
+        value = {
+            key: _optional_float(row.get(key))
+            for key in ("max_consecutive", "first_board", "ge2_count", "promo_rate", "seal_rate")
+        }
+        for key in value:
+            if value[key] is None and current_state is None:
+                value[key] = seeds[key]
+        label, current_state = advance_phase_state(
+            current_state,
+            date_value=str(row["date"]),
+            height=value["max_consecutive"],
+            first_board=value["first_board"],
+            ge2=value["ge2_count"],
+            promo=value["promo_rate"],
+            seal=value["seal_rate"],
+            state=row.get("state"),
+        )
+        labels.append(label)
+
+    labeled = rows.with_columns(pl.Series("phase", labels, dtype=pl.Utf8))
+    return labeled, current_state
+
+
+def classify_phase_series(daily: pl.DataFrame) -> pl.DataFrame:
+    """对完整日序打阶段标签, 保持既有调用方兼容。"""
+    labeled, _ = classify_phase_series_with_state(daily)
+    return labeled

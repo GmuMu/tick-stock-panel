@@ -484,6 +484,8 @@ export interface RegimeRow {
   above_ma20_pct: number
   total_amount: number
   avg_turnover: number
+  money_effect_pct?: number | null
+  money_effect_score?: number | null
   // 4 个子维度分(0-100, 重算后才有; 旧数据可能缺) — 综合分的加权来源
   avg_pct?: number
   median_pct?: number
@@ -493,6 +495,10 @@ export interface RegimeRow {
   speculation_score?: number
   resilience_score?: number
   trend_score?: number
+  quality_status?: DataQualityStatus
+  quality_usable?: boolean
+  quality_coverage_ratio?: number | null
+  quality_reason?: string
   // 情绪周期阶段与梯队指标(重算后才有; 旧数据可能缺)
   phase?: MarketPhase | null
   first_board?: number | null
@@ -507,6 +513,7 @@ export interface RegimeRow {
 export interface RegimeHistory {
   rows: RegimeRow[]
   total: number
+  quality?: DataQualityInfo
 }
 
 export interface RegimeStateItem {
@@ -519,12 +526,39 @@ export interface RegimeStateItem {
 export interface RegimeStates {
   distribution: RegimeStateItem[]
   days: number
+  quality?: DataQualityInfo
+}
+
+export type DataQualityStatus = 'FRESH' | 'PARTIAL' | 'STALE' | 'MISSING' | 'INVALID'
+
+export interface DataQualityInfo {
+  dataset: string
+  status: DataQualityStatus
+  usable: boolean
+  fail_closed: boolean
+  coverage_ratio: number | null
+  expected_rows: number | null
+  actual_rows: number | null
+  observed_at: string | null
+  age_seconds: number | null
+  stale_after_seconds: number | null
+  reason: string
 }
 
 export interface RegimeCoverage {
   rows: number
   earliest_date: string | null
   latest_date: string | null
+  source_dataset?: string
+  source_rows?: number
+  source_earliest_date?: string | null
+  source_latest_date?: string | null
+  missing_dates?: string[]
+  stale_dates?: string[]
+  quality?: DataQualityInfo
+  quality_status?: DataQualityStatus
+  quality_usable?: boolean
+  coverage_ratio?: number | null
 }
 
 // ── 市场阶段(情绪周期) 与 主线 ──
@@ -2539,7 +2573,7 @@ export const api = {
     const qs = params.toString()
     return request<RegimeHistory>(`/api/regime/history${qs ? `?${qs}` : ''}`)
   },
-  regimeLatest: () => request<{ row: RegimeRow | null }>('/api/regime/latest'),
+  regimeLatest: () => request<{ row: RegimeRow | null; quality?: DataQualityInfo }>('/api/regime/latest'),
   regimeStates: (days = 60) => request<RegimeStates>(`/api/regime/states?days=${days}`),
   regimeCoverage: () => request<RegimeCoverage>('/api/regime/coverage'),
   regimeRecompute: (start?: string, end?: string) => {

@@ -34,6 +34,13 @@ def _data_dir(request: Request) -> Any:
     return request.app.state.repo.store.data_dir
 
 
+def _regime_quality(request: Request) -> dict:
+    return regime_builder.get_regime_coverage(
+        _data_dir(request),
+        request.app.state.repo,
+    )
+
+
 def _df_to_records(df) -> list[dict]:
     """polars DataFrame → JSON 安全的 list[dict](date 转 ISO 字符串)。"""
     if df is None or df.is_empty():
@@ -49,9 +56,9 @@ def _df_to_records(df) -> list[dict]:
 @router.get("/history")
 def regime_history(
     request: Request,
-    start: date | None = Query(None),
-    end: date | None = Query(None),
-    limit: int = Query(120, ge=1, le=1000),
+    start: Annotated[date | None, Query()] = None,
+    end: Annotated[date | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 120,
 ):
     """历史环境时序(含状态/指标)。默认最近 N 天。"""
     global _cache, _cache_ts
@@ -65,8 +72,9 @@ def regime_history(
             return _cache["data"]
 
     df = regime_builder.load_regime_history(_data_dir(request))
+    quality = _regime_quality(request)
     if df.is_empty():
-        result: dict = {"rows": [], "total": 0}
+        result: dict = {"rows": [], "total": 0, "quality": quality}
     else:
         if start:
             df = df.filter(pl_col_date(df, ">=", start))
@@ -78,7 +86,7 @@ def regime_history(
             df = df.sort("date", descending=True).head(limit)
         df = df.sort("date")
         rows = _df_to_records(df)
-        result = {"rows": rows, "total": len(rows)}
+        result = {"rows": rows, "total": len(rows), "quality": quality}
 
     with _cache_lock:
         _cache = {"key": cache_key, "data": result}
@@ -98,11 +106,12 @@ def pl_col_date(df, op: str, value: date):
 def regime_latest(request: Request):
     """最新一日环境(轻量)。"""
     df = regime_builder.load_regime_history(_data_dir(request))
+    quality = _regime_quality(request)
     if df.is_empty():
-        return {"row": None}
+        return {"row": None, "quality": quality}
     latest = df.sort("date", descending=True).head(1)
     rows = _df_to_records(latest)
-    return {"row": rows[0] if rows else None}
+    return {"row": rows[0] if rows else None, "quality": quality}
 
 
 @router.get("/states")
@@ -112,8 +121,9 @@ def regime_states(
 ):
     """状态分布统计(各状态天数/占比)。"""
     df = regime_builder.load_regime_history(_data_dir(request))
+    quality = _regime_quality(request)
     if df.is_empty():
-        return {"distribution": [], "days": 0}
+        return {"distribution": [], "days": 0, "quality": quality}
     df = df.sort("date", descending=True).head(days)
     total = df.height
     counts = df.group_by("state").len().sort("len", descending=True)
@@ -126,13 +136,13 @@ def regime_states(
         }
         for r in counts.to_dicts()
     ]
-    return {"distribution": distribution, "days": total}
+    return {"distribution": distribution, "days": total, "quality": quality}
 
 
 @router.get("/coverage")
 def regime_coverage(request: Request):
     """regime 数据覆盖元信息(供数据画像)。"""
-    return regime_builder.get_regime_coverage(_data_dir(request))
+    return _regime_quality(request)
 
 
 @router.post("/recompute")

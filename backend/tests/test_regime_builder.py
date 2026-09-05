@@ -143,6 +143,24 @@ def test_aggregate_daily_ma20_above():
     assert r1["above_ma20_pct"] == 0.5
 
 
+def test_aggregate_daily_money_effect_is_amount_weighted():
+    df = pl.DataFrame({
+        "date": [date(2026, 1, 2), date(2026, 1, 2)],
+        "symbol": ["A", "B"],
+        "close": [11.0, 9.0],
+        "change_pct": [0.10, -0.02],
+        "amount": [3.0, 1.0],
+        "ma20": [10.0, 10.0],
+        "signal_limit_up": [True, False],
+        "signal_limit_down": [False, False],
+        "signal_broken_limit_up": [False, False],
+        "consecutive_limit_ups": [1, 0],
+    })
+    row = regime_builder._aggregate_daily(df).row(0, named=True)
+    assert row["money_effect_pct"] == 0.07
+    assert row["money_effect_score"] is not None
+
+
 def test_aggregate_empty_returns_empty():
     assert regime_builder._aggregate_daily(pl.DataFrame()).is_empty()
 
@@ -317,6 +335,29 @@ def test_coverage_empty(tmp_path):
     cov = regime_builder.get_regime_coverage(tmp_path)
     assert cov["rows"] == 0
     assert cov["earliest_date"] is None
+    assert cov["quality_status"] == "MISSING"
+
+
+def test_coverage_reports_source_gap_and_quality(tmp_path):
+    enriched = tmp_path / "kline_daily_enriched"
+    for ds in ("2026-01-01", "2026-01-02", "2026-01-03"):
+        partition = enriched / f"date={ds}"
+        partition.mkdir(parents=True)
+        (partition / "part.parquet").write_bytes(b"x")
+    regime_builder.upsert_regime_history(tmp_path, pl.DataFrame({
+        "date": [date(2026, 1, 1), date(2026, 1, 3)],
+        "state": ["range", "strong"], "score": [50, 80],
+    }))
+
+    class _FakeRepo:
+        class store:
+            data_dir = tmp_path
+
+    cov = regime_builder.get_regime_coverage(tmp_path, _FakeRepo())
+    assert cov["source_rows"] == 3
+    assert cov["missing_dates"] == ["2026-01-02"]
+    assert cov["quality_status"] == "PARTIAL"
+    assert cov["quality_usable"] is False
 
 
 # ───────────────────────── 双检测 ─────────────────────────

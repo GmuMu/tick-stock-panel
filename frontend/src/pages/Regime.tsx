@@ -12,6 +12,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
 import {
   Activity, RefreshCw, Loader2, Gauge, TrendingUp, TrendingDown, Minus,
+  ShieldCheck, AlertTriangle,
   Pencil, CalendarDays, Repeat, Rows3, LayoutGrid, Flame, Layers, Filter, X,
 } from 'lucide-react'
 import {
@@ -44,6 +45,22 @@ function scoreToColor(score: number): string {
   if (score >= 45) return REGIME_STATE_COLORS.range
   if (score >= 30) return REGIME_STATE_COLORS.lean_weak
   return REGIME_STATE_COLORS.weak
+}
+
+const QUALITY_LABELS: Record<string, string> = {
+  FRESH: '数据完整',
+  PARTIAL: '数据部分缺失',
+  STALE: '源数据已更新',
+  MISSING: '暂无源数据',
+  INVALID: '数据无效',
+}
+
+const QUALITY_COLORS: Record<string, string> = {
+  FRESH: '#10b981',
+  PARTIAL: '#f59e0b',
+  STALE: '#f97316',
+  MISSING: '#94a3b8',
+  INVALID: '#ef4444',
 }
 
 // ── 时间范围 ──────────────────────────────────────────────
@@ -189,6 +206,9 @@ export function Regime() {
 
   const rows: RegimeRow[] = history.data?.rows ?? []
   const latest = rows.length > 0 ? rows[rows.length - 1] : null
+  const regimeQuality = coverage.data?.quality
+  const qualityStatus = coverage.data?.quality_status ?? regimeQuality?.status
+  const qualityColor = QUALITY_COLORS[qualityStatus ?? 'MISSING']
   const hasPhaseData = rows.length > 0 && rows.some(r => r.phase != null)
   const segments = phases.data?.segments ?? []
 
@@ -457,7 +477,7 @@ export function Regime() {
     return () => { zr.off('click', onClick) }
   }, [phaseChartInst, phaseOption, rows])
 
-  // 趋势图: 综合分主线 + 4 子维度曲线(可切换) + 状态背景色带 + 涨停数柱状
+  // 趋势图: 综合分主线 + 5 子维度曲线(可切换) + 状态背景色带 + 涨停数柱状
   const trendOption = useMemo<echarts.EChartsOption | null>(() => {
     if (rows.length === 0) return null
     const dates = rows.map(r => r.date)
@@ -467,6 +487,7 @@ export function Regime() {
     const speculation = rows.map(r => r.speculation_score ?? null)
     const resilience = rows.map(r => r.resilience_score ?? null)
     const trend = rows.map(r => r.trend_score ?? null)
+    const money = rows.map(r => r.money_effect_score ?? null)
 
     // 状态背景色带: 合并连续同状态日期段, 每段用状态色低透明度着色
     const stateBands: any[] = []
@@ -492,10 +513,10 @@ export function Regime() {
       backgroundColor: 'transparent',
       tooltip: { trigger: 'axis', backgroundColor: ct.tooltipBg, borderColor: ct.tooltipBorder, textStyle: { color: ct.tooltipText } },
       legend: {
-        data: ['综合分', '涨停数', '赚钱', '投机', '抗跌', '趋势'],
+        data: ['综合分', '涨停数', '赚钱', '投机', '抗跌', '趋势', '资金'],
         textStyle: { color: ct.text, fontSize: 10 }, top: 0,
-        // 默认只显示综合分 + 涨停数(简洁); 4 个子维度默认隐藏, 点图例展开看驱动因素
-        selected: { '综合分': true, '涨停数': true, '赚钱': false, '投机': false, '抗跌': false, '趋势': false },
+        // 默认只显示综合分 + 涨停数(简洁); 5 个子维度默认隐藏, 点图例展开看驱动因素
+        selected: { '综合分': true, '涨停数': true, '赚钱': false, '投机': false, '抗跌': false, '趋势': false, '资金': false },
       },
       grid: { left: 48, right: 64, top: 36, bottom: 56 },
       xAxis: {
@@ -515,7 +536,7 @@ export function Regime() {
         // 涨停数柱状(半透明背景, 左轴)
         { name: '涨停数', type: 'bar', data: limitUps, yAxisIndex: 0, barMaxWidth: 6,
           itemStyle: { color: REGIME_STATE_COLORS.strong, opacity: 0.35 }, z: 1 },
-        // 4 子维度曲线(右轴=综合分): 帮助理解综合分由什么驱动(点图例可切换)
+        // 5 子维度曲线(右轴=综合分): 帮助理解综合分由什么驱动(点图例可切换)
         { name: '赚钱', type: 'line', data: profit, smooth: true, symbol: 'none', yAxisIndex: 1,
           lineStyle: { ...subLineStyle, color: '#f59e0b' }, z: 2 },
         { name: '投机', type: 'line', data: speculation, smooth: true, symbol: 'none', yAxisIndex: 1,
@@ -524,6 +545,8 @@ export function Regime() {
           lineStyle: { ...subLineStyle, color: '#10b981' }, z: 2 },
         { name: '趋势', type: 'line', data: trend, smooth: true, symbol: 'none', yAxisIndex: 1,
           lineStyle: { ...subLineStyle, color: '#3b82f6' }, z: 2 },
+        { name: '资金', type: 'line', data: money, smooth: true, symbol: 'none', yAxisIndex: 1,
+          lineStyle: { ...subLineStyle, color: '#e11d48' }, z: 2 },
         // 综合分主线(加粗置顶, 右轴) + 状态背景色带 + 阈值横虚线
         { name: '综合分', type: 'line', data: scores, smooth: true, symbol: 'none', yAxisIndex: 1,
           lineStyle: { width: 1.5, color: ct.textStrong }, areaStyle: { opacity: 0.06 }, z: 3,
@@ -704,6 +727,33 @@ export function Regime() {
           </div>
         </div>
       </div>
+
+      {/* ── 数据质量摘要: 质量异常时把缺口直接暴露在主页面 ── */}
+      {coverage.data && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-card border border-border bg-surface/60 px-3 py-2 text-[10px]">
+          {qualityStatus === 'FRESH'
+            ? <ShieldCheck className="h-3.5 w-3.5" style={{ color: qualityColor }} />
+            : <AlertTriangle className="h-3.5 w-3.5" style={{ color: qualityColor }} />}
+          <span className="font-semibold" style={{ color: qualityColor }}>
+            {QUALITY_LABELS[qualityStatus ?? 'MISSING'] ?? qualityStatus ?? '未知质量'}
+          </span>
+          <span className="text-muted">
+            覆盖 {coverage.data.rows}/{coverage.data.source_rows ?? coverage.data.rows} 天
+            {coverage.data.coverage_ratio != null && ` · ${(coverage.data.coverage_ratio * 100).toFixed(1)}%`}
+          </span>
+          {coverage.data.missing_dates && coverage.data.missing_dates.length > 0 && (
+            <span className="text-warning">
+              缺失 {coverage.data.missing_dates.length} 天
+            </span>
+          )}
+          {coverage.data.stale_dates && coverage.data.stale_dates.length > 0 && (
+            <span className="text-warning">
+              待重算 {coverage.data.stale_dates.length} 天
+            </span>
+          )}
+          {regimeQuality?.reason && <span className="ml-auto text-muted">{regimeQuality.reason}</span>}
+        </div>
+      )}
 
       {/* ── 视图切换: 市场环境 / 情绪周期 (两组内容 tab 隔离, 减少单页高度) ── */}
       <div className="flex items-center gap-2">
@@ -1021,9 +1071,9 @@ export function Regime() {
       {/* ══ 市场环境 tab: 最新日概览 + 状态时间轴 + 趋势/分布 + 日历热力图 ══ */}
       <div className={cn('space-y-4', view !== 'regime' && 'hidden')}>
 
-      {/* ── 最新日概览 (4 个指标卡, 去掉与看板重复的涨停/涨跌/成交额) ── */}
+      {/* ── 最新日概览 (5 个指标卡, 去掉与看板重复的涨停/涨跌/成交额) ── */}
       {latest ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           {/* 状态卡(保留) */}
           <div className={cn(cardCls, 'p-3')}>
             <div className="flex items-center gap-1.5 text-[10px] text-muted">
@@ -1039,6 +1089,11 @@ export function Regime() {
               <div className="h-full rounded-full transition-all"
                 style={{ width: `${Math.max(2, Math.min(100, latest.score))}%`, backgroundColor: REGIME_STATE_COLORS[latest.state] }} />
             </div>
+            {latest.quality_status && latest.quality_status !== 'FRESH' && (
+              <div className="mt-1.5 text-[9px] text-warning" title={latest.quality_reason}>
+                {QUALITY_LABELS[latest.quality_status] ?? latest.quality_status}
+              </div>
+            )}
           </div>
 
           {/* 当前势头(新) */}
@@ -1062,10 +1117,10 @@ export function Regime() {
             ) : <div className="mt-1.5 text-sm text-muted">—</div>}
           </div>
 
-          {/* 4 子维度迷你条(新) */}
+          {/* 5 子维度迷你条(新) */}
           <div className={cn(cardCls, 'p-3')}>
             <div className="flex items-center gap-1.5 text-[10px] text-muted">
-              <Activity className="h-3 w-3" /> 四维拆解 · {latest.date}
+              <Activity className="h-3 w-3" /> 五维拆解 · {latest.date}
             </div>
             <div className="mt-2 space-y-1">
               {([
@@ -1073,6 +1128,7 @@ export function Regime() {
                 { label: '投机', val: latest.speculation_score, color: '#a855f7' },
                 { label: '抗跌', val: latest.resilience_score, color: '#10b981' },
                 { label: '趋势', val: latest.trend_score, color: '#3b82f6' },
+                { label: '资金', val: latest.money_effect_score, color: '#e11d48' },
               ] as const).map(d => (
                 <div key={d.label} className="flex items-center gap-1.5">
                   <span className="w-6 shrink-0 text-[9px] text-muted">{d.label}</span>
@@ -1083,6 +1139,20 @@ export function Regime() {
                   <span className="w-5 shrink-0 text-right text-[9px] font-mono text-muted">{d.val ?? '—'}</span>
                 </div>
               ))}
+            </div>
+          </div>
+
+          {/* 资金效应: 成交额加权涨跌幅, 防止只看家数而忽略权重 */}
+          <div className={cn(cardCls, 'p-3')}>
+            <div className="flex items-center gap-1.5 text-[10px] text-muted">
+              <Activity className="h-3 w-3" /> 资金效应 · {latest.date}
+            </div>
+            <div className="mt-1.5 text-lg font-semibold"
+              style={{ color: latest.money_effect_pct == null ? '#94a3b8' : latest.money_effect_pct >= 0 ? '#ef4444' : '#10b981' }}>
+              {latest.money_effect_pct == null ? '—' : `${(latest.money_effect_pct * 100).toFixed(2)}%`}
+            </div>
+            <div className="mt-1 text-[10px] text-muted">
+              成交额加权涨跌 · 评分 {latest.money_effect_score ?? '—'}
             </div>
           </div>
 

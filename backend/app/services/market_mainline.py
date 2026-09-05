@@ -159,9 +159,18 @@ def compute_mainline_range(repo, data_dir: Path, start: date, end: date,
         if map_df.is_empty():
             return pl.DataFrame()
 
+    scan = pl.scan_parquet(enriched_dir / "**" / "*.parquet")
+    available = set(scan.collect_schema().names())
+    core_columns = {"date", "symbol", "consecutive_limit_ups"}
+    if not core_columns.issubset(available):
+        logger.warning(
+            "mainline source missing core columns: %s",
+            sorted(core_columns - available),
+        )
+        return pl.DataFrame()
+    select_columns = sorted(core_columns | ({"amount"} if "amount" in available else set()))
     limit_rows = (
-        pl.scan_parquet(enriched_dir / "**" / "*.parquet")
-        .select(["date", "symbol", "consecutive_limit_ups", "amount"])
+        scan.select(select_columns)
         .filter(
             (pl.col("date") >= start) & (pl.col("date") <= end)
             & (pl.col("consecutive_limit_ups") >= 1)
@@ -195,6 +204,19 @@ def compute_mainline_range(repo, data_dir: Path, start: date, end: date,
         ).alias("member")
     )
 
+    leader_expr = (
+        pl.col("symbol")
+        .sort_by(
+            pl.col("consecutive_limit_ups"),
+            pl.col("amount"),
+            descending=[True, True],
+        )
+        .first()
+        if "amount" in limit_rows.columns
+        else pl.col("symbol")
+        .sort_by(pl.col("consecutive_limit_ups"), descending=True)
+        .first()
+    )
     agg = (
         joined.group_by(["date", "member"])
         .agg(
@@ -206,13 +228,7 @@ def compute_mainline_range(repo, data_dir: Path, start: date, end: date,
               .filter(pl.col("consecutive_limit_ups") >= 2)
               .n_unique()
               .alias("rungs_filled"),
-            pl.col("symbol")
-              .sort_by(
-                  pl.col("consecutive_limit_ups"), pl.col("amount"),
-                  descending=[True, True],
-              )
-              .first()
-              .alias("leader_symbol"),
+            leader_expr.alias("leader_symbol"),
         )
     )
 

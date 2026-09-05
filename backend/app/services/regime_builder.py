@@ -13,13 +13,30 @@
 """
 from __future__ import annotations
 
+import json
 import logging
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import polars as pl
 
+from app.data_quality import DataQuality
+
 logger = logging.getLogger(__name__)
+
+REGIME_CONTRACT_VERSION = "1.1"
+REGIME_SOURCE_DATASET = "kline_daily_enriched"
+_QUALITY_COMPONENTS = {
+    "breadth": ("change_pct",),
+    "money_effect": ("amount",),
+    "ladder": ("consecutive_limit_ups",),
+    "trend": ("close", "ma20"),
+    "limit_signals": (
+        "signal_limit_up",
+        "signal_limit_down",
+        "signal_broken_limit_up",
+    ),
+}
 
 # ───────────────────────── 状态分类阈值(可调) ─────────────────────────
 # 评分模型对齐看板情绪分(market_overview_builder): 采用 _score(low,high) 归一化
@@ -28,10 +45,11 @@ logger = logging.getLogger(__name__)
 # 全量回填补算会爆内存; 这两维对历史择时影响小, 且用户可在看板单独查看。
 
 WEIGHTS = {
-    "profit": 0.35,        # 赚钱(涨家数/均涨幅/中位涨幅/强弱差) — 最反映赚钱难度
+    "profit": 0.30,        # 赚钱(涨家数/均涨幅/中位涨幅/强弱差) — 最反映赚钱难度
     "speculation": 0.25,   # 投机(涨停数/封板率/连板高度)
     "resilience": 0.20,    # 抗跌(跌家数/大跌股占比) — 识别弱势的关键, 原模型缺失
-    "trend": 0.20,         # 趋势(指数涨幅/MA20上方占比)
+    "trend": 0.15,         # 趋势(指数涨幅/MA20上方占比)
+    "money": 0.10,         # 资金效应(成交额加权涨跌幅)
 }
 
 # 离散状态阈值(与看板情绪分统一)
@@ -69,7 +87,7 @@ def _compute_subscores(metrics: dict) -> dict:
     metrics 期望字段(由 _aggregate_daily 聚合):
       up_pct, down_pct, avg_pct, median_pct, strong_up_pct, strong_down_pct,
       strong_diff_pct, limit_up, seal_rate(0-1), max_consecutive,
-      index_pct(小数), above_ma20_pct(0-1)
+      index_pct(小数), above_ma20_pct(0-1), money_effect_pct(小数)
     """
     # 赚钱维度
     # _score 的 low/high 用 A 股 2022-2026 真实 p15/p85 分位数校准,
@@ -99,16 +117,18 @@ def _compute_subscores(metrics: dict) -> dict:
         _score(metrics.get("index_pct", 0) * 100, -2.5, 2.5) * 0.50  # 指数涨幅(对称)
         + _score((metrics.get("above_ma20_pct", 0.5) or 0.5) * 100, 22, 76) * 0.50  # MA20上方 p15/p85
     )
+    money = _score(metrics.get("money_effect_pct", 0) * 100, -1.5, 1.5)
 
     score = (
         profit * WEIGHTS["profit"]
         + speculation * WEIGHTS["speculation"]
         + resilience * WEIGHTS["resilience"]
         + trend * WEIGHTS["trend"]
+        + money * WEIGHTS["money"]
     )
     return {
         "profit": profit, "speculation": speculation,
-        "resilience": resilience, "trend": trend,
+        "resilience": resilience, "trend": trend, "money": money,
         "score": max(0, min(100, score)),
     }
 
@@ -170,8 +190,50 @@ def _aggregate_daily(df: pl.DataFrame, index_pct_map: dict | None = None) -> pl.
     if "consecutive_limit_ups" in avail and "symbol" in df.columns:
         df = with_prev_consecutive(df)
 
+    # 资金效应用成交额加权涨跌幅表达。无成交额时仍保留其它指标,
+    # 但必须在 quality_status 中明确标记 partial, 避免把默认值伪装成完整数据。
+    if "amount" in avail and "change_pct" in avail:
+        amount_valid = (
+            pl.col("amount").is_not_null()
+            & (pl.col("amount") > 0)
+            & pl.col("change_pct").is_not_null()
+            & (pl.col("change_pct") == pl.col("change_pct"))
+        )
+        df = df.with_columns([
+            pl.when(amount_valid).then(pl.col("amount")).otherwise(None).alias("_money_base"),
+            pl.when(amount_valid)
+              .then(pl.col("amount") * pl.col("change_pct"))
+              .otherwise(None)
+              .alias("_money_change"),
+        ])
+
     # 基础聚合 — 全部用 group_by 一次性向量化算出, 避免逐日 filter 扫全表(OOM/超时元凶)。
     has_ma20 = "close" in avail and "ma20" in avail
+    change_valid = (
+        pl.col("change_pct").is_not_null()
+        & (pl.col("change_pct") == pl.col("change_pct"))
+    )
+    money_valid = (
+        pl.col("amount").is_not_null()
+        & (pl.col("amount") > 0)
+        & change_valid
+        if "amount" in avail
+        else pl.lit(False)
+    )
+    trend_valid = (
+        pl.col("close").is_not_null()
+        & pl.col("ma20").is_not_null()
+        & (pl.col("ma20") > 0)
+        if has_ma20
+        else pl.lit(False)
+    )
+    limit_valid = (
+        pl.col("signal_limit_up").is_not_null()
+        & pl.col("signal_limit_down").is_not_null()
+        & pl.col("signal_broken_limit_up").is_not_null()
+        if all(key in avail for key in _QUALITY_COMPONENTS["limit_signals"])
+        else pl.lit(False)
+    )
     grouped = df.group_by("date").agg(
         *[
             pl.col("change_pct").gt(0).sum().alias("up_count")
@@ -210,12 +272,20 @@ def _aggregate_daily(df: pl.DataFrame, index_pct_map: dict | None = None) -> pl.
             if "consecutive_limit_ups" in avail else [pl.lit(0).alias("max_consecutive")]
         ),
         *(
-            [pl.col("amount").sum().alias("total_amount")]
+            [pl.when(money_valid).then(pl.col("amount")).otherwise(None).sum().alias("total_amount")]
             if "amount" in avail else [pl.lit(0).alias("total_amount")]
         ),
         *(
-            [pl.col("amount").mean().alias("avg_amount")]
+            [pl.when(money_valid).then(pl.col("amount")).otherwise(None).mean().alias("avg_amount")]
             if "amount" in avail else [pl.lit(0).alias("avg_amount")]
+        ),
+        *(
+            [
+                pl.col("_money_base").sum().alias("_money_base"),
+                pl.col("_money_change").sum().alias("_money_change"),
+            ]
+            if "_money_base" in df.columns
+            else [pl.lit(0.0).alias("_money_base"), pl.lit(0.0).alias("_money_change")]
         ),
         # MA20 上方占比: 向量化一次算出 (避免逐日 filter 扫全表)。
         # 仅统计 ma20 有效(非空且>0)的行中, close>ma20 的占比。
@@ -237,6 +307,16 @@ def _aggregate_daily(df: pl.DataFrame, index_pct_map: dict | None = None) -> pl.
             ladder_promo_aggs()
             if "consecutive_limit_ups" in avail and "_prev_consec" in df.columns else []
         ),
+        # 每日质量组件计数: 用最小组件覆盖率判定整行是否 partial。
+        pl.when(change_valid).then(1).otherwise(0).sum().alias("_valid_breadth"),
+        pl.when(money_valid).then(1).otherwise(0).sum().alias("_valid_money"),
+        (
+            pl.when(pl.col("consecutive_limit_ups").is_not_null()).then(1).otherwise(0).sum()
+            if "consecutive_limit_ups" in avail
+            else pl.lit(0).alias("_valid_ladder")
+        ).alias("_valid_ladder"),
+        pl.when(trend_valid).then(1).otherwise(0).sum().alias("_valid_trend"),
+        pl.when(limit_valid).then(1).otherwise(0).sum().alias("_valid_limit_signals"),
     ).sort("date")
 
     # 转成 dict 列表做分类(规则引擎需逐日算, 但只扫 grouped 行数=天数, 不再回扫全表)
@@ -259,6 +339,9 @@ def _aggregate_daily(df: pl.DataFrame, index_pct_map: dict | None = None) -> pl.
         strong_down_pct = ((r.get("strong_down_count", 0) or 0) / total * 100) if total > 0 else 0.0
         avg_pct = r.get("avg_pct", 0.0) or 0.0
         median_pct = r.get("median_pct", 0.0) or 0.0
+        money_base = r.get("_money_base", 0.0) or 0.0
+        money_change = r.get("_money_change", 0.0) or 0.0
+        money_effect_pct = money_change / money_base if money_base > 0 else None
         metrics = {
             "limit_up": limit_up,
             "limit_down": r.get("limit_down", 0) or 0,
@@ -280,10 +363,41 @@ def _aggregate_daily(df: pl.DataFrame, index_pct_map: dict | None = None) -> pl.
             "strong_up_pct": strong_up_pct,
             "strong_down_pct": strong_down_pct,
             "strong_diff_pct": strong_up_pct - strong_down_pct,
+            "money_effect_pct": money_effect_pct or 0.0,
         }
         state, score = classify_state(metrics)
         # 4 个子维度分(供趋势图展示"综合分由什么驱动" + 未来策略按子维度过滤)
         sub = _compute_subscores(metrics)
+        quality_counts = {
+            name: int(r.get(f"_valid_{suffix}", 0) or 0)
+            for name, suffix in (
+                ("breadth", "breadth"),
+                ("money_effect", "money"),
+                ("ladder", "ladder"),
+                ("trend", "trend"),
+                ("limit_signals", "limit_signals"),
+            )
+        }
+        quality_ratios = {
+            name: (count / total if total > 0 else 0.0)
+            for name, count in quality_counts.items()
+        }
+        missing_components = [
+            name for name, ratio in quality_ratios.items() if ratio <= 0
+        ]
+        partial_components = [
+            name for name, ratio in quality_ratios.items() if 0 < ratio < 1
+        ]
+        if missing_components:
+            quality_status = "PARTIAL"
+            quality_reason = "missing_" + ",".join(missing_components)
+        elif partial_components:
+            quality_status = "PARTIAL"
+            quality_reason = "incomplete_" + ",".join(partial_components)
+        else:
+            quality_status = "FRESH"
+            quality_reason = "complete"
+        quality_ratio = min(quality_ratios.values()) if quality_ratios else 0.0
         rows.append({
             "date": r["date"],
             "state": state,
@@ -295,11 +409,19 @@ def _aggregate_daily(df: pl.DataFrame, index_pct_map: dict | None = None) -> pl.
             "seal_rate": round(metrics["seal_rate"], 4),
             "up_count": up,
             "down_count": down,
+            "up_pct": round(up_pct, 4),
+            "down_pct": round(down_pct, 4),
             "up_ratio": round(metrics["up_ratio"], 4),
             "index_pct": round(metrics["index_pct"], 4),
             "above_ma20_pct": round(ma20_above, 4),
             "total_amount": metrics["total_amount"],
             "avg_turnover": metrics["avg_turnover"],
+            "money_effect_pct": (
+                round(money_effect_pct, 6) if money_effect_pct is not None else None
+            ),
+            "money_effect_score": (
+                round(sub["money"]) if money_effect_pct is not None else None
+            ),
             # 新增列(供未来策略按强势股占比等过滤)
             "avg_pct": round(avg_pct, 4),
             "median_pct": round(median_pct, 4),
@@ -310,6 +432,11 @@ def _aggregate_daily(df: pl.DataFrame, index_pct_map: dict | None = None) -> pl.
             "speculation_score": round(sub["speculation"]),
             "resilience_score": round(sub["resilience"]),
             "trend_score": round(sub["trend"]),
+            "quality_status": quality_status,
+            "quality_usable": quality_status == "FRESH",
+            "quality_coverage_ratio": round(quality_ratio, 4),
+            "quality_reason": quality_reason,
+            "quality_valid_rows": min(quality_counts.values()) if quality_counts else 0,
             # 梯队指标(阶段判定所需); phase 由 refresh_phase_labels 统一重标
             **finalize_ladder_row(r),
         })
@@ -332,6 +459,7 @@ def _compute_batch(repo, enriched_dir, instruments, historical_shares,
     返回目标区间(不含 warmup)的含指标列 DataFrame。
     """
     from datetime import timedelta
+
     from app.indicators.pipeline import compute_indicators, compute_limit_signals
     warmup_start = batch_start - timedelta(days=warmup_days)
     df = pl.scan_parquet(enriched_dir / "**" / "*.parquet").filter(
@@ -386,7 +514,7 @@ def _scan_enriched_fallback(
         from app.services import preferences
         batch_days = preferences.get_regime_batch_days()
         warmup_days = preferences.get_regime_warmup_days()
-    except Exception:  # noqa: BLE001
+    except Exception:
         batch_days = _REGIME_BATCH_DAYS_DEFAULT
         warmup_days = _REGIME_WARMUP_DAYS_DEFAULT
 
@@ -433,7 +561,7 @@ def _scan_enriched_fallback(
         if not daily_parts:
             return None
         return pl.concat(daily_parts, how="vertical_relaxed")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("regime scan_enriched_fallback failed: %s", e)
         return None
 
@@ -445,7 +573,7 @@ def _load_index_pct(repo, start: date, end: date, symbol: str = "000001.SH") -> 
         if df.is_empty() or "change_pct" not in df.columns:
             return {}
         return {r["date"]: float(r["change_pct"] or 0) for r in df.iter_rows(named=True)}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("regime load_index_pct failed: %s", e)
         return {}
 
@@ -504,10 +632,56 @@ def run_regime_batch(repo, start: date, end: date) -> pl.DataFrame:
 # ───────────────────────── 持久化(upsert) ─────────────────────────
 
 REGIME_DIR = "regime_history"
+PHASE_STATE_FILENAME = "phase_state.json"
+REGIME_STALE_AFTER_SECONDS = 3 * 24 * 60 * 60
 
 
 def regime_path(data_dir: Path) -> Path:
     return data_dir / REGIME_DIR / "part.parquet"
+
+
+def phase_state_path(data_dir: Path) -> Path:
+    """返回阶段平滑状态 sidecar 路径。"""
+    return data_dir / REGIME_DIR / PHASE_STATE_FILENAME
+
+
+def load_phase_state(data_dir: Path):
+    """读取可跨进程恢复的阶段平滑状态; 不存在或版本不兼容时返回 None。"""
+    from app.services.market_phase import PHASE_CONTRACT_VERSION, PhaseSmoothingState
+
+    p = phase_state_path(data_dir)
+    if not p.exists():
+        return None
+    try:
+        value = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("phase state must be a JSON object")
+        state = PhaseSmoothingState.from_dict(value)
+        if state.contract_version != PHASE_CONTRACT_VERSION:
+            logger.warning(
+                "phase state contract mismatch: %s != %s",
+                state.contract_version,
+                PHASE_CONTRACT_VERSION,
+            )
+            return None
+        return state
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as e:
+        logger.warning("load_phase_state failed: %s", e)
+        return None
+
+
+def save_phase_state(data_dir: Path, state) -> None:
+    """原子写入阶段平滑状态, 避免进程中断留下半份 JSON。"""
+    if state is None:
+        return
+    p = phase_state_path(data_dir)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(f"{p.suffix}.tmp")
+    tmp.write_text(
+        json.dumps(state.to_dict(), ensure_ascii=False, sort_keys=True, indent=2),
+        encoding="utf-8",
+    )
+    tmp.replace(p)
 
 
 def load_regime_history(data_dir: Path) -> pl.DataFrame:
@@ -517,30 +691,31 @@ def load_regime_history(data_dir: Path) -> pl.DataFrame:
         return pl.DataFrame()
     try:
         return pl.read_parquet(p)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("load_regime_history failed: %s", e)
         return pl.DataFrame()
 
 
-def refresh_phase_labels(data_dir: Path) -> int:
+def refresh_phase_labels(data_dir: Path, initial_state=None) -> int:
     """对全量 regime 时序重标情绪周期阶段(冰点/启动/主升/高潮/退潮/修复)。
 
     阶段判定需要完整日序(EMA 平滑 + 持续性确认), 不能在单批内完成,
     因此每次 upsert 后调用本函数整体重标并写回。行数为天数(千级), 开销可忽略。
     返回标注的天数; 阶段列缺失所需指标(旧 schema 未重算)时返回 0。
     """
-    from app.services.market_phase import classify_phase_series
+    from app.services.market_phase import classify_phase_series_with_state
 
     df = load_regime_history(data_dir)
     required = {"date", "max_consecutive", "first_board", "ge2_count", "promo_rate", "seal_rate"}
     if df.is_empty() or not required.issubset(df.columns):
         return 0
     try:
-        labeled = classify_phase_series(df)
+        labeled, final_state = classify_phase_series_with_state(df, initial_state)
     except Exception as e:
         logger.warning("refresh_phase_labels failed: %s", e)
         return 0
     labeled.write_parquet(regime_path(data_dir))
+    save_phase_state(data_dir, final_state)
     return labeled.height
 
 
@@ -578,15 +753,71 @@ def upsert_regime_history(data_dir: Path, new_rows: pl.DataFrame) -> None:
     combined.write_parquet(p)
 
 
-def get_regime_coverage(data_dir: Path) -> dict:
-    """返回 regime 时序的覆盖元信息(供数据画像/API)。"""
+def get_regime_coverage(data_dir: Path, repo=None) -> dict:
+    """返回 regime 与 enriched 源数据的覆盖、缺失和 freshness 元信息。"""
     df = load_regime_history(data_dir)
-    if df.is_empty():
-        return {"rows": 0, "earliest_date": None, "latest_date": None}
+    existing_dates = set(df["date"].to_list()) if not df.is_empty() else set()
+    source_dates = enriched_date_set(repo) if repo is not None else set(existing_dates)
+    actual_dates = existing_dates & source_dates if source_dates else existing_dates
+    missing_dates = sorted(source_dates - existing_dates)
+    stale_dates = detect_stale_dates(data_dir, repo) if repo is not None else []
+
+    observed_at = None
+    p = regime_path(data_dir)
+    if p.exists():
+        try:
+            observed_at = datetime.fromtimestamp(p.stat().st_mtime, tz=UTC)
+        except OSError:
+            observed_at = None
+
+    if not source_dates and not existing_dates:
+        quality = DataQuality.from_observation(
+            REGIME_SOURCE_DATASET,
+            observed_at=None,
+            stale_after_seconds=REGIME_STALE_AFTER_SECONDS,
+            actual_rows=0,
+            reason="no_source_data",
+        )
+    else:
+        quality = DataQuality.from_counts(
+            REGIME_SOURCE_DATASET,
+            expected_rows=len(source_dates) or len(existing_dates),
+            actual_rows=len(actual_dates),
+            observed_at=observed_at,
+            # 历史 regime 文件本身可以数月不重写; stale 由源分区 mtime
+            # 对比显式判定, 不能按文件年龄误报。
+            stale_after_seconds=None,
+        )
+        if stale_dates:
+            quality = DataQuality(
+                dataset=REGIME_SOURCE_DATASET,
+                status="STALE",
+                coverage_ratio=quality.coverage_ratio,
+                expected_rows=quality.expected_rows,
+                actual_rows=quality.actual_rows,
+                observed_at=quality.observed_at,
+                age_seconds=quality.age_seconds,
+                stale_after_seconds=quality.stale_after_seconds,
+                reason="source_updated",
+                usable=False,
+            )
+
+    source_earliest = min(source_dates) if source_dates else None
+    source_latest = max(source_dates) if source_dates else None
     return {
         "rows": df.height,
-        "earliest_date": str(df["date"].min()),
-        "latest_date": str(df["date"].max()),
+        "earliest_date": str(df["date"].min()) if not df.is_empty() else None,
+        "latest_date": str(df["date"].max()) if not df.is_empty() else None,
+        "source_dataset": REGIME_SOURCE_DATASET,
+        "source_rows": len(source_dates),
+        "source_earliest_date": str(source_earliest) if source_earliest else None,
+        "source_latest_date": str(source_latest) if source_latest else None,
+        "missing_dates": [str(value) for value in missing_dates],
+        "stale_dates": [str(value) for value in stale_dates],
+        "quality": quality.to_dict(),
+        "quality_status": quality.status,
+        "quality_usable": quality.usable,
+        "coverage_ratio": quality.coverage_ratio,
     }
 
 

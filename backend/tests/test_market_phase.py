@@ -6,6 +6,7 @@ from itertools import pairwise
 
 import polars as pl
 
+from app.services import regime_builder
 from app.services.market_phase import (
     CLIMAX_GE2,
     EBB_PROMO,
@@ -19,6 +20,7 @@ from app.services.market_phase import (
     PHASE_RALLY,
     PHASE_REPAIR,
     classify_phase_series,
+    classify_phase_series_with_state,
     finalize_ladder_row,
     with_prev_consecutive,
 )
@@ -178,6 +180,19 @@ class TestClassifyPhaseSeries:
         out = classify_phase_series(df)
         assert out["phase"].null_count() == 0
 
+    def test_stateful_chunks_match_single_pass(self):
+        """按两批恢复状态时, 标签和最终状态必须与单次全量一致。"""
+        df = _series([
+            {"days": 5, "height": 4, "first": 22, "ge2": 5, "promo": 0.14, "seal": 0.55, "state": "range"},
+            {"days": 5, "height": 8, "first": 60, "ge2": 18, "promo": 0.3, "seal": 0.7, "state": "strong"},
+            {"days": 5, "height": 5, "first": 30, "ge2": 9, "promo": 0.16, "seal": 0.54, "state": "range"},
+        ])
+        whole, whole_state = classify_phase_series_with_state(df)
+        first, state = classify_phase_series_with_state(df.head(7))
+        second, split_state = classify_phase_series_with_state(df.tail(df.height - 7), state)
+        assert first["phase"].to_list() + second["phase"].to_list() == whole["phase"].to_list()
+        assert split_state == whole_state
+
 
 class TestRefreshPhaseLabels:
     def test_roundtrip_writes_phase_keeps_state(self, tmp_path):
@@ -193,6 +208,9 @@ class TestRefreshPhaseLabels:
         assert "phase" in out.columns
         assert PHASE_RALLY in set(out["phase"].to_list())
         assert set(out["state"].to_list()) == {"strong"}
+        state = regime_builder.load_phase_state(tmp_path)
+        assert state is not None
+        assert state.last_date == str(df["date"].max())
 
     def test_missing_columns_returns_zero(self, tmp_path):
         regime_path(tmp_path).parent.mkdir(parents=True)

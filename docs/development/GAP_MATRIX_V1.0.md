@@ -84,10 +84,10 @@
 
 | Task | 状态 | 真实证据 / 入口 | 下一步 |
 | --- | --- | --- | --- |
-| TASK-0701 | PARTIAL | `backend/app/services/market_phase.py`、`api/regime.py`、前端 Regime 页面已存在 | 对齐计划的 coverage/partial 与质量状态 |
-| TASK-0702 | PARTIAL | breadth、money effect、mainline 服务与测试已存在 | 统一输入数据源和缺失处理 |
-| TASK-0703 | PARTIAL | `test_market_phase.py`、`test_regime_builder.py` 已有平滑相关覆盖 | 补确定性 golden 与跨日状态 |
-| TASK-0704 | PARTIAL | 前端已有 Regime 页面 | 若需新增 UI，优先使用 extension route/slot；不复制核心页面 |
+| TASK-0701 | DONE | `services/regime_builder.py::get_regime_coverage`、`api/regime.py` 四个查询接口和 `DataQuality` 统一返回 source coverage、missing/stale 与 fail-closed 状态；`docs/tasks/TASK-0701-market-regime.md` | Phase 7 完成，进入 Phase 8 `TASK-0801` |
+| TASK-0702 | DONE | `regime_builder._aggregate_daily` 统一 breadth、成交额加权 money effect 与质量组件；`market_mainline` 对 amount 缺失安全降级；`docs/tasks/TASK-0702-breadth-money-effect.md` | 进入 Phase 8 `TASK-0801` |
+| TASK-0703 | DONE | `market_phase.PhaseSmoothingState`、stateful classifier、原子 sidecar `regime_history/phase_state.json` 与跨分片回归；`docs/tasks/TASK-0703-regime-smoothing.md` | 进入 Phase 8 `TASK-0801` |
+| TASK-0704 | DONE | `frontend/src/pages/Regime.tsx` 展示质量、缺口、资金效应和资金评分曲线；`frontend/src/lib/api.ts` 完成类型契约；`docs/tasks/TASK-0704-regime-ui.md` | 进入 Phase 8 `TASK-0801` |
 
 ## Phase 8：Thesis、Trade Plan、Decision、Journal
 
