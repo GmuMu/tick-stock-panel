@@ -39,7 +39,7 @@
 | TASK-0201 | DONE | `plugins/freestockdb/bridge.py` 提供可配置 HTTP Bridge；`FreeStockDBProvider` 接入 daily、minute、realtime(Tick)、adj_factor 和 instruments，并经 custom loader/能力矩阵注册；32 个定向回归通过 | 进入 `TASK-0202`，定义 financial canonical schema |
 | TASK-0202 | DONE | `data_providers/financial.py` 定义五张财务表 canonical schema；扶摇、TickFlow 和自定义 HTTP 财务源在 `financial_sync` 统一归一化，保留公告日、source 和扩展字段；28 个财务回归通过 | 进入 `TASK-0203`，集中实现 Provider health/retry/fallback |
 | TASK-0203 | DONE | `data_providers/health.py` 提供线程安全 ProviderHealthRegistry、RetryPolicy、指数退避、错误脱敏和 fallback 记录；kline、minute、financial、quote 服务统一接入；`/api/settings/provider-health` 暴露状态与 error rate；83 个定向回归通过 | 进入 `TASK-0204`，建立跨 Provider golden baseline |
-| TASK-0204 | GAP | 已有 Provider 单元测试，但无跨 Provider golden baseline | 依赖 0201/0202，新增 `docs/data/DATA_GOLDEN_BASELINE.md` 与 fixture |
+| TASK-0204 | DONE | `docs/data/DATA_GOLDEN_BASELINE.md` 与 `backend/tests/fixtures/provider_golden/market.json` 固化跨 Provider 日K、分钟、实时、除权和财务报告期口径；`tests/test_provider_golden.py` 及 132 个相关回归通过 | 进入 `TASK-0301`，抽出可版本化 IndicatorSpec |
 
 ## Phase 3：指标规范与增量一致性
 
@@ -156,7 +156,7 @@
 
 ## 执行结论
 
-1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0203` 已完成，当前分支为 `feat/0101-canonical-contracts`；下一步进入 `TASK-0204`，现有工作树改动仍由维护者决定提交或携带。
+1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0204` 已完成，当前分支为 `feat/0101-canonical-contracts`；下一步进入 `TASK-0301`，现有工作树改动仍由维护者决定提交或携带。
 2. `full_minute` YAML 解析断点仍是已确认缺口，依赖它的自定义全量分钟任务不得宣称端到端完成。
 3. 交易、OMS、QMT 和实盘相关任务全部保持 `GAP/BLOCKED`，在没有风险、幂等、审计和 Kill Switch 之前不接真实交易。
 4. 以后每个 Task 必须先补契约测试，再实现代码；完成后更新对应 `docs/tasks/TASK-xxxx-*.md`，不以“页面能打开”代替验收。

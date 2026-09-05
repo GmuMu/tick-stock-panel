@@ -1,0 +1,177 @@
+{
+  "symbol": "600519.SH",
+  "date": "2026-09-04",
+  "quote_timestamp_ms": 1788485700000,
+  "daily": {
+    "expected": {
+      "symbol": "600519.SH",
+      "date": "2026-09-04",
+      "open": 1400.0,
+      "high": 1410.0,
+      "low": 1390.0,
+      "close": 1405.0,
+      "volume": 1000.0,
+      "amount": 123456789.0
+    },
+    "tickflow": {
+      "600519.SH": {
+        "timestamp": [1788485400000],
+        "open": [1400.0],
+        "high": [1410.0],
+        "low": [1390.0],
+        "close": [1405.0],
+        "volume": [1000.0],
+        "amount": [123456789.0]
+      }
+    },
+    "freestockdb": {
+      "symbol": "sh.600519",
+      "trade_date": "2026-09-04T09:30:00+08:00",
+      "open_price": 1400.0,
+      "high_price": 1410.0,
+      "low_price": 1390.0,
+      "close_price": 1405.0,
+      "vol": 100000,
+      "turnover": 123456789.0
+    },
+    "fuyao": {
+      "date_ms": 1788451200000,
+      "open_price": 1400.0,
+      "high_price": 1410.0,
+      "low_price": 1390.0,
+      "close_price": 1405.0,
+      "volume": 100000,
+      "turnover": 123456789.0
+    }
+  },
+  "minute": {
+    "expected": {
+      "symbol": "600519.SH",
+      "datetime": "2026-09-04T09:35:00",
+      "open": 1400.0,
+      "high": 1402.0,
+      "low": 1399.0,
+      "close": 1401.0,
+      "volume": 12.0,
+      "amount": 1681200.0
+    },
+    "freestockdb": {
+      "ts_code": "600519.SH",
+      "datetime": "2026-09-04T09:35:00+08:00",
+      "open": 1400.0,
+      "high": 1402.0,
+      "low": 1399.0,
+      "close": 1401.0,
+      "vol": 1200,
+      "amount": 1681200.0
+    },
+    "custom": {
+      "code": "600519.SH",
+      "time": "2026-09-04T09:35:00",
+      "open": 1400.0,
+      "high": 1402.0,
+      "low": 1399.0,
+      "close": 1401.0,
+      "volume": 12.0,
+      "amount": 1681200.0
+    }
+  },
+  "realtime": {
+    "expected": {
+      "symbol": "600519.SH",
+      "last_price": 1401.0,
+      "prev_close": 1400.0,
+      "open": 1400.0,
+      "high": 1402.0,
+      "low": 1399.0,
+      "volume": 1200.0,
+      "amount": 168120000.0,
+      "change_pct": 0.0007142857142857143,
+      "change_amount": 1.0
+    },
+    "freestockdb": {
+      "code": "600519",
+      "exchange": "SH",
+      "name": "贵州茅台",
+      "price": 1401.0,
+      "prev_close": 1400.0,
+      "open_price": 1400.0,
+      "high_price": 1402.0,
+      "low_price": 1399.0,
+      "vol": 120000,
+      "turnover": 168120000.0,
+      "change_percent": 0.07142857142857143,
+      "timestamp": 1788485700000
+    },
+    "fuyao": {
+      "thscode": "600519.SH",
+      "last_price": 1401.0,
+      "price_change": 1.0,
+      "price_change_ratio_pct": 0.07142857142857143,
+      "open_price": 1400.0,
+      "high_price": 1402.0,
+      "low_price": 1399.0,
+      "prev_price": 1400.0,
+      "volume": 120000,
+      "turnover": 168120000.0
+    }
+  },
+  "adj_factor": {
+    "expected": {
+      "symbol": "600519.SH",
+      "trade_date": "2026-06-30",
+      "ex_factor": 1.25
+    },
+    "tickflow": {
+      "symbol": "600519.SH",
+      "trade_date": "2026-06-30",
+      "adj_factor": 1.25
+    },
+    "freestockdb": {
+      "ts_code": "600519.SH",
+      "date": "2026-06-30",
+      "factor": 1.25
+    },
+    "fuyao_event": {
+      "symbol": "600519.SH",
+      "ex_date": "2026-06-30",
+      "dividend": 20.0,
+      "bonus": 0.0,
+      "allot": 0.0,
+      "allot_price": 0.0
+    },
+    "fuyao_reference_closes": {
+      "2026-06-29": 100.0,
+      "2026-06-30": 80.0
+    }
+  },
+  "financial": {
+    "expected": {
+      "symbol": "600519.SH",
+      "period_end": "2026-06-30",
+      "announce_date": "2026-08-15",
+      "revenue": 90703260964.48,
+      "net_income": 46033330566.78,
+      "net_income_attributable": 44516880421.86,
+      "basic_eps": 35.57
+    },
+    "tickflow": {
+      "report_period": "2026-06-30",
+      "report_date": "2026-08-15",
+      "operating_income": "90703260964.48",
+      "net_profit": "46033330566.78",
+      "parent_holder_net_profit": "44516880421.86",
+      "basic_eps": "35.57"
+    },
+    "fuyao": {
+      "fiscal_year": 2026,
+      "fiscal_period": "Q2",
+      "period_end_ms": 1782748800000,
+      "report_date_ms": 1786723200000,
+      "operating_income": 90703260964.48,
+      "net_profit": 46033330566.78,
+      "parent_holder_net_profit": 44516880421.86,
+      "basic_eps": 35.57
+    }
+  }
+}
