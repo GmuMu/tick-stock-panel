@@ -136,7 +136,7 @@
       <p class="subtitle">一张持续更新的开发地图：每个任务都绑定真实代码入口、当前状态、前置依赖和下一步动作。</p>
       <div class="meta">
       <span>校准日期：<strong>2026-09-05</strong></span>
-        <span>当前分支：<strong>feat/0101-canonical-contracts</strong></span>
+        <span>当前分支：<strong>feat/sequoia-x-strategies</strong></span>
         <span>基线：<strong>25e5680</strong></span>
         <span>运行数据：<strong>data/ 不进入 Git</strong></span>
       </div>
@@ -176,7 +176,7 @@
     <div id="empty" class="empty">没有匹配的任务。可以换一个关键词或筛选条件。</div>
 
     <footer class="footer">
-      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。下次开发优先从 <code>TASK-0301</code> 开始。
+      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；下一步回到 <code>TASK-0301</code>。
     </footer>
   </main>
 
@@ -196,6 +196,7 @@
       ["Phase 2", "外部数据源与 Provider 治理", "TASK-0202", "Financial-API Provider / Dataset", "done", "补充财务报表、指标、公司画像和特色数据的标准化 Provider。", "data_providers/financial.py; plugins/fuyao/provider.py; services/financial_sync.py; tests/test_financial_contract.py", "已完成：五张财务表 canonical schema、多源同步收口、公告日和 source 保留；28 个财务回归通过。", "feat/0202-financial-api"],
       ["Phase 2", "外部数据源与 Provider 治理", "TASK-0203", "Provider Health / Retry / Fallback", "done", "统一健康状态、失败率、重试、退避和 fallback 可观测性。", "data_providers/health.py; services/kline_sync.py; financial_sync.py; quote_service.py; settings/provider-health; tests/test_provider_health.py", "已完成：统一 ProviderHealthRegistry、指数退避、错误脱敏、fallback 事件和状态 API；83 个定向回归通过。", "feat/0203-provider-health"],
       ["Phase 2", "外部数据源与 Provider 治理", "TASK-0204", "Cross-Provider Golden", "done", "用跨 Provider fixture 验证字段、单位、复权和报告期口径。", "docs/data/DATA_GOLDEN_BASELINE.md; backend/tests/test_provider_golden.py", "已完成：固定 fixture 覆盖日K、分钟、实时、除权和财务报告期；132 个相关回归通过。", "test/0204-provider-golden"],
+      ["Phase 2", "外部数据源与 Provider 治理", "TASK-0205", "Sequoia-X Strategies", "done", "接入 Sequoia-X 中可由日线 OHLCV 表达的 6 个选股策略。", "backend/app/strategy/builtin/sequoia_*.py; backend/tests/test_sequoia_x_strategies.py; docs/tasks/TASK-0205-sequoia-x-strategies.md", "已完成：6 个策略进入 matrix_native；PrivatePlacement 因公司行为数据缺口暂不实现。", "feat/sequoia-x-strategies"],
 
       ["Phase 3", "指标规范与增量一致性", "TASK-0301", "IndicatorSpec", "partial", "把指标定义、依赖列、窗口和版本变成可验证规范。", "backend/app/indicators/pipeline.py::compute_all", "抽出版本化 IndicatorSpec，不复制 pipeline。", "feat/0301-indicator-spec"],
       ["Phase 3", "指标规范与增量一致性", "TASK-0302", "Indicator Golden Tests", "partial", "建立指标数值、列集合和边界输入的 golden 测试。", "tests/test_enriched_* 与指标相关测试", "增加 golden 值和列级契约。", "test/0302-indicator-golden"],
@@ -333,7 +334,7 @@
       document.getElementById("percent").textContent = `${percent.toFixed(1)}%`;
       document.querySelector(".ring").style.setProperty("--progress", `${percent}%`);
       document.getElementById("summary-title").textContent = `${counts.done}/${tasks.length} 个任务已完成`;
-      document.getElementById("summary-text").textContent = `当前阶段：TASK-0301 · IndicatorSpec。部分完成项表示已有基础但还没有达到计划验收边界。`;
+      document.getElementById("summary-text").textContent = `当前阶段：TASK-0301 · IndicatorSpec。Sequoia-X 已完成 6 个日线策略接入；部分完成项表示已有基础但还没有达到计划验收边界。`;
     }
 
     document.querySelectorAll("[data-filter]").forEach(button => {

@@ -8,13 +8,14 @@
 
 ## 🔍 选股引擎(Screener)
 
-**18 个内置策略**,每个策略一个独立 Python 文件,基于 Polars 表达式向量化实现(`backend/app/strategy/builtin/`):
+**31 个内置策略**,每个策略一个独立 Python 文件,基于矩阵或 Polars 表达式向量化实现(`backend/app/strategy/builtin/`):
 
 | 类型        | 代表策略                                                 |
 | :---------- | :------------------------------------------------------- |
 | 趋势 / 形态 | 趋势突破 · 均线多头 · MA 金叉 · MACD 金叉放量 · 布林突破 |
 | 量价 / 涨停 | 量价齐升 · 高换手强势 · 连板股 · 断板反包 · 涨停动量     |
 | 反转 / 波动 | 超跌反弹 · 超卖反转 · 新低反转 · 低波动龙头 · 回踩 MA20  |
+| Sequoia-X | TurtleTrade · MaVolume · HighTightFlag · LimitUpShakeout · UptrendLimitDown · RpsBreakout |
 
 全 A 股一次扫表,Polars 毫秒级返回。选股页点策略卡片即可扫描,结果支持导出。**分钟策略**与日线策略共用同一个标的池,按策略声明的周期自动路由执行(分钟策略依赖数据页开启分钟数据落盘)。
 
