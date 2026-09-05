@@ -75,10 +75,10 @@
 | Task | 状态 | 真实证据 / 入口 | 下一步 |
 | --- | --- | --- | --- |
 | TASK-0601 | DONE | `strategy/watch_scope.py` 提供版本化 `WatchScope`；规则、引擎、API 和事件统一携带 scope snapshot；自选分组 revision 变化按标的精确失效，空/删除/读取失败均 fail-closed；33 个监控回归通过 | 进入 `TASK-0602`，补 rolling watch 独立状态契约 |
-| TASK-0602 | PARTIAL | 监控引擎已有 cooldown、状态和持久化触发记录 | 对 rolling watch 做独立状态契约 |
-| TASK-0603 | PARTIAL | `intraday_signals`、异动监控和监控规则已有信号路径 | 补 resonance 的输入/输出及去重测试 |
-| TASK-0604 | PARTIAL | `monitor_rules` API、`MonitorRuleEngine`、SSE 与触发记录已存在 | 将计划 DSL 与现有规则兼容收敛，禁止第二套告警引擎 |
-| TASK-0605 | PARTIAL | 飞书、企微/Webhook、系统通知和语音路径已有 | 统一 Delivery 状态、失败重试和审计记录 |
+| TASK-0602 | DONE | `strategy/rolling_watch.py` 提供版本化状态合同；普通行情规则按标的维护 active/inactive 窗口、entered/continued/exited/expired 迁移和跨轮询去重；规则/API/前端支持 `rolling_window_seconds`；37 个监控回归通过 | 进入 `TASK-0603`，补 resonance 输入/输出与去重契约 |
+| TASK-0603 | DONE | `strategy/resonance.py` 提供版本化共振状态合同；引擎按标的累计独立信号时间、窗口过期和 entered 去重；规则/API/前端/SSE 携带 resonance 快照；`tests/test_resonance.py` 与监控回归通过 | 进入 `TASK-0604` |
+| TASK-0604 | DONE | `strategy/alert_rule.py` 提供统一 AlertRule 快照；旧规则 normalize 兼容、保存 revision 递增；规则列表/保存响应/普通与特殊告警事件均携带快照；继续复用单一 `MonitorRuleEngine` | 进入 `TASK-0605` |
+| TASK-0605 | DONE | `services/alert_delivery.py` 提供 queued/sent/failed/skipped 状态、渠道独立 delivery ID、revision/错误/时间审计；SSE、系统通知、飞书、企微接入；企微网络/5xx 重试、4xx/业务错误不重试；128 个监控专项回归通过 | Phase 6 完成，进入 Phase 7 `TASK-0701` |
 
 ## Phase 7：Market Regime
 

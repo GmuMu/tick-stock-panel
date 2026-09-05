@@ -896,9 +896,13 @@ export interface MonitorRule {
   id: string
   name: string
   enabled: boolean
-  type: 'strategy' | 'signal' | 'price' | 'market' | 'ladder' | 'sector' | 'abnormal' | 'volume_delta' | 'date'
+  type: 'strategy' | 'signal' | 'resonance' | 'price' | 'market' | 'ladder' | 'sector' | 'abnormal' | 'volume_delta' | 'date'
   asset_type?: 'stock' | 'etf' | 'index'
   scope_contract_version?: string
+  rolling_watch_contract_version?: string
+  resonance_contract_version?: string
+  alert_rule_contract_version?: string
+  revision?: number
   scope: 'symbols' | 'all' | 'sector' | 'watchlist_group'
   symbols: string[]
   /** scope=watchlist_group 时绑定的自选分组 id (成员动态解析, 增删自选自动生效) */
@@ -919,14 +923,35 @@ export interface MonitorRule {
   conditions: MonitorCondition[]
   logic: 'and' | 'or'
   cooldown_seconds: number
+  /** 普通行情规则的滚动观察窗口, 超过此时间未观察到将自动过期 */
+  rolling_window_seconds?: number
+  /** 共振规则的信号累计窗口 */
+  resonance_window_seconds?: number
+  /** 共振规则至少需要命中的独立信号数 */
+  resonance_min_signals?: number
   severity: 'info' | 'warn' | 'critical'
   message: string
   webhook_url?: string
   webhook_enabled?: boolean  // 兼容老规则, 已由 webhook_channels 取代
   webhook_channels?: string[]  // 命中时推送的外部渠道 (合法值 'feishu' | 'wecom')
   created_at?: string
+  updated_at?: string
   runtime_warning?: string
   watch_scope?: WatchScope
+  rolling_watch?: {
+    contract_version: string
+    rule_id: string
+    symbol: string
+    event_type: string
+    status: 'inactive' | 'active' | string
+    transition: 'inactive' | 'entered' | 'continued' | 'exited' | 'expired' | string
+    window_seconds: number
+    first_seen_at?: number | null
+    last_seen_at?: number | null
+    last_matched_at?: number | null
+    last_triggered_at?: number | null
+    observation_count: number
+  }
   // ladder 专属: 封单监控; volume_delta 复用 metric 表示阈值口径 (volume=手数, amount=金额)
   metric?: 'sealed_vol' | 'sealed_amount' | 'volume' | 'amount'
   threshold?: number                        // 封单 <= 此值时报警
@@ -972,6 +997,7 @@ export interface MonitorRuleOptions {
   types: { key: string; label: string }[]
   scopes: { key: string; label: string }[]
   logics: { key: string; label: string }[]
+  resonance_contract_version?: string
   severities: { key: string; label: string }[]
   directions: { key: string; label: string }[]
   intraday_signal_support: {
@@ -1017,6 +1043,29 @@ export interface AlertEvent {
   abnormal_value?: number
   abnormal_threshold?: number
   abnormal_closeness?: number
+  /** 触发时使用的告警规则不可变快照 */
+  alert_rule?: {
+    alert_rule_contract_version: string
+    revision: number
+    id: string
+    type: string
+    [key: string]: unknown
+  }
+  /** 多信号共振状态快照 */
+  resonance?: {
+    contract_version: string
+    rule_id: string
+    symbol: string
+    status: 'inactive' | 'pending' | 'active' | string
+    transition: 'inactive' | 'pending' | 'entered' | 'continued' | 'exited' | 'expired' | string
+    window_seconds: number
+    min_signals: number
+    active_signals: string[]
+    signal_times: Record<string, number>
+    first_signal_at?: number | null
+    last_signal_at?: number | null
+    last_triggered_at?: number | null
+  }
   /** ext 富化字段 (行业/概念等), 键为 "{configId}__{fieldName}" */
   [key: string]: unknown
 }
@@ -1757,6 +1806,8 @@ export interface StrategyAlertEvent {
   price?: number | null
   change_pct?: number | null
   signals?: string[]
+  resonance?: AlertEvent['resonance']
+  alert_rule?: AlertEvent['alert_rule']
   /** ext 富化字段 (行业/概念等), 键为 "{configId}__{fieldName}" */
   [key: string]: unknown
 }
@@ -3313,6 +3364,24 @@ export const api = {
     const s = qs.toString()
     return request<{ alerts: AlertEvent[]; total: number }>(`/api/alerts${s ? `?${s}` : ''}`)
   },
+
+  alertsDeliveries: (limit = 500) =>
+    request<{
+      deliveries: Array<{
+        contract_version: string
+        delivery_id: string
+        event_ts?: number
+        rule_id?: string
+        rule_revision?: number
+        channel: string
+        status: 'queued' | 'sent' | 'failed' | 'skipped' | string
+        attempts: number
+        queued_at?: number | null
+        updated_at: number
+        error?: string | null
+      }>
+      contract_version: string
+    }>(`/api/alerts/deliveries?limit=${encodeURIComponent(String(limit))}`),
 
   alertsClear: () =>
     request<{ ok: boolean; cleared: number }>('/api/alerts', { method: 'DELETE' }),

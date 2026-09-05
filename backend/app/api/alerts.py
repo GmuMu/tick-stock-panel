@@ -46,6 +46,17 @@ def list_alerts(
     return {"alerts": events, "total": total}
 
 
+@router.get("/deliveries")
+def list_alert_deliveries(request: Request, limit: int = 500):
+    """查询外部/系统通知的投递状态审计。"""
+    from app.services import alert_delivery
+
+    return {
+        "deliveries": alert_delivery.list_recent(_data_dir(request), limit=limit),
+        "contract_version": alert_delivery.DELIVERY_CONTRACT_VERSION,
+    }
+
+
 @router.delete("")
 def clear_alerts(request: Request):
     """清空全部触发记录。"""

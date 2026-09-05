@@ -45,7 +45,7 @@ from app.strategy.monitor import format_alert_quote
 SOURCE_LABELS = {
     "strategy": "策略", "signal": "信号", "price": "价格",
     "market": "异动", "ladder": "连板梯队", "sector": "板块",
-    "volume_delta": "放量", "abnormal": "异动", "date": "日期提醒",
+    "volume_delta": "放量", "abnormal": "异动", "resonance": "共振", "date": "日期提醒",
 }
 
 
@@ -1215,6 +1215,8 @@ class QuoteService:
                                 "abnormal_window", "abnormal_value", "abnormal_threshold",
                                 "abnormal_closeness", "volume_delta", "volume_delta_span",
                                 "volume_delta_amount",
+                                "rolling_watch",
+                                "resonance", "alert_rule",
                             ):
                                 if key in ev:
                                     alert[key] = ev[key]
@@ -1230,6 +1232,21 @@ class QuoteService:
                 self._enrich_alerts_ext(all_alerts)
                 self._broadcast_alerts(all_alerts)
                 logger.info("监控评估完成: %d 条通知", len(all_alerts))
+
+                # SSE/站内是独立的实时投递通道; 主告警已先落盘, 因此审计失败
+                # 也不会影响外部通知或行情轮询。
+                try:
+                    from app.services import alert_delivery
+                    for ev in rule_events:
+                        alert_delivery.record(
+                            self._app_state.repo.store.data_dir,
+                            ev,
+                            "sse",
+                            "sent",
+                            attempts=1,
+                        )
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("SSE 投递审计失败: %s", e)
 
                 # 系统通知 (可选通道, 由 preferences 开关控制)。
                 # cooldown 去重已在 MonitorRuleEngine 做过, 这里只负责转发。
@@ -1506,15 +1523,14 @@ class QuoteService:
         以便反查引擎规则判断是否启用推送。
         """
         try:
-            from app.services import preferences
+            from app.services import alert_delivery, preferences
             from app.services import webhook_adapter
 
             feishu_url = preferences.get_feishu_webhook_url()
             feishu_secret = preferences.get_feishu_webhook_secret()
             wecom_url = preferences.get_wecom_webhook_url()
-            # 两个通道都没配置才跳过
-            if not feishu_url and not wecom_url:
-                return
+            app_state = getattr(self, "_app_state", None)
+            data_dir = app_state.repo.store.data_dir if app_state is not None else None
 
             # 反查规则, 过滤出启用推送的事件
             rules = engine.rules if engine is not None else {}
@@ -1535,16 +1551,34 @@ class QuoteService:
                 body = f"{symbol} {name} {message}".strip() if symbol else (message or name)
                 # 补上触发时的现价/涨跌幅, 让推送可执行 (止损到底触发在哪个价位)
                 body = _body_with_quote(body, ev)
-                # 提交到独立线程池, 不阻塞行情轮询线程 (webhook 慢/重试不拖累实时行情+告警)。
-                # 按渠道独立投递: 飞书 / 企业微信谁被勾选且已配置就推谁。
-                # 应用内 alerts.jsonl 记录与 SSE 已在前面完成, 不依赖 webhook 成败,
-                # 失败由 webhook_adapter 记 WARNING(可见)。
+                # 每个渠道独立记录并异步投递; 外部服务慢/失败不影响 alerts.jsonl 或 SSE。
                 if feishu_url and "feishu" in channels:
-                    _WEBHOOK_EXECUTOR.submit(webhook_adapter.send_feishu, feishu_url, title, body, feishu_secret)
+                    if data_dir is None:
+                        _WEBHOOK_EXECUTOR.submit(
+                            webhook_adapter.send_feishu,
+                            feishu_url, title, body, feishu_secret,
+                        )
+                    else:
+                        alert_delivery.submit(
+                            data_dir, ev, "feishu", webhook_adapter.send_feishu,
+                            (feishu_url, title, body, feishu_secret), _WEBHOOK_EXECUTOR,
+                        )
                     enqueued += 1
+                elif "feishu" in channels:
+                    if data_dir is not None:
+                        alert_delivery.record_skipped(data_dir, ev, "feishu", "飞书 Webhook 未配置")
                 if wecom_url and "wecom" in channels:
-                    _WEBHOOK_EXECUTOR.submit(webhook_adapter.send_wecom, wecom_url, title, body)
+                    if data_dir is None:
+                        _WEBHOOK_EXECUTOR.submit(webhook_adapter.send_wecom, wecom_url, title, body)
+                    else:
+                        alert_delivery.submit(
+                            data_dir, ev, "wecom", webhook_adapter.send_wecom,
+                            (wecom_url, title, body), _WEBHOOK_EXECUTOR,
+                        )
                     enqueued += 1
+                elif "wecom" in channels:
+                    if data_dir is not None:
+                        alert_delivery.record_skipped(data_dir, ev, "wecom", "企业微信 Webhook 未配置")
             if enqueued:
                 logger.info("Webhook 已提交 %d 条 (异步投递, 按渠道独立投递, 失败记 WARNING)", enqueued)
         except Exception as e:  # noqa: BLE001
@@ -1559,11 +1593,11 @@ class QuoteService:
         - 批量策略事件 (symbol="") 聚合为一条通知, 避免刷屏
         """
         try:
-            from app.services import preferences
+            from app.services import alert_delivery, preferences
             from app.services import notify_adapter
 
-            if not preferences.get_system_notify_enabled():
-                return
+            data_dir = self._app_state.repo.store.data_dir
+            enabled = preferences.get_system_notify_enabled()
 
             for ev in all_alerts:
                 # 通知标题: 用 source 分类 (策略/信号/价格/异动)
@@ -1583,7 +1617,13 @@ class QuoteService:
                 body = _body_with_quote(body, ev)
 
                 title = f"TickFlow · {source_label}"
-                notify_adapter.notify(title, body)
+                if not enabled:
+                    alert_delivery.record_skipped(data_dir, ev, "system", "系统通知未启用")
+                    continue
+                alert_delivery.submit(
+                    data_dir, ev, "system", notify_adapter.notify,
+                    (title, body), _WEBHOOK_EXECUTOR,
+                )
         except Exception as e:  # noqa: BLE001
             logger.debug("系统通知发送异常 (不影响告警主流程): %s", e)
 

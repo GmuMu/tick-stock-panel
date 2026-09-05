@@ -23,11 +23,12 @@ interface Props {
 }
 
 const TYPE_DEFAULT_NAME: Record<string, string> = {
-  signal: '信号监控', price: '价格监控', market: '市场异动监控', strategy: '策略监控', sector: '板块监控', abnormal: '异动监控', volume_delta: '轮询放量监控',
+  signal: '信号监控', resonance: '多信号共振', price: '价格监控', market: '市场异动监控', strategy: '策略监控', sector: '板块监控', abnormal: '异动监控', volume_delta: '轮询放量监控',
 }
 
 const TYPE_ICONS = {
   signal: Activity,
+  resonance: Waypoints,
   price: TrendingUp,
   market: RadioTower,
   strategy: Waypoints,
@@ -72,6 +73,9 @@ const emptyRule = (preset?: Partial<MonitorRule>): MonitorRule => ({
   conditions: [],
   logic: 'or',
   cooldown_seconds: 3600,
+  rolling_window_seconds: 900,
+  resonance_window_seconds: 300,
+  resonance_min_signals: 2,
   severity: 'info',
   message: '',
   threshold_volume: 9000,
@@ -226,6 +230,20 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           }
         } else if (!Number.isFinite(d.threshold_volume) || (d.threshold_volume ?? 0) < 1) {
           throw new Error('单轮放量阈值必须是 ≥1 的手数')
+        }
+      } else if (d.type === 'resonance') {
+        delete d.score_min
+        delete d.score_max
+        delete d.notify_events
+        delete d.rolling_window_seconds
+        d.logic = 'or'
+        d.conditions = d.conditions.filter(c => c.op === 'truth')
+        if (d.conditions.length < 2) throw new Error('共振规则至少选择两个信号')
+        if ((d.resonance_min_signals ?? 2) < 2 || (d.resonance_min_signals ?? 2) > d.conditions.length) {
+          throw new Error('最少信号数必须在 2 到已选信号数之间')
+        }
+        if (!Number.isInteger(d.resonance_window_seconds) || (d.resonance_window_seconds ?? 0) < 1) {
+          throw new Error('共振窗口必须是正整数秒')
         }
       } else {
         delete d.score_min
@@ -445,11 +463,15 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
 
   const onSignalPickerChange = (next: string[]) => {
     setDraft(d => {
-      const nonTruthConds = d.conditions.filter(c => c.op !== 'truth')
+      const nonTruthConds = d.type === 'resonance' ? [] : d.conditions.filter(c => c.op !== 'truth')
       const truthConds: MonitorCondition[] = next.map(field => ({ field, op: 'truth' }))
       return {
         ...d,
         scope: next.some(signal => MONITOR_INTRADAY_SIGNAL_OPTIONS.includes(signal)) ? 'symbols' : d.scope,
+        logic: d.type === 'resonance' ? 'or' : d.logic,
+        resonance_min_signals: d.type === 'resonance'
+          ? Math.min(d.resonance_min_signals ?? 2, Math.max(2, next.length))
+          : d.resonance_min_signals,
         conditions: [...nonTruthConds, ...truthConds],
       }
     })
@@ -1250,8 +1272,61 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         </div>
       </div>}
 
+      {/* 多信号共振 */}
+      {draft.type === 'resonance' && (
+        <div className="space-y-3 border-t border-border/60 pt-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-[11px] text-muted">共振信号</span>
+              <p className="mt-1 text-[10px] text-muted/70">多个独立信号在时间窗口内同时/先后命中，达到最少数量后触发一次。</p>
+            </div>
+            <span className="rounded bg-accent/10 px-2 py-1 text-[10px] font-mono text-accent">OR · 共振</span>
+          </div>
+          <SignalPicker
+            signals={selectedSignals}
+            onChange={onSignalPickerChange}
+            kind="entry"
+            options={{
+              builtinSignals: pickerSignals,
+              disabledSignals: intradayDisabledSignals,
+              disabledSignalHint: intradayDisabledHint,
+              filterCustomByKind: false,
+            }}
+          />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1.5">
+              <span className="text-[11px] text-muted">共振窗口(秒)</span>
+              <input
+                type="number"
+                min={1}
+                value={draft.resonance_window_seconds ?? 300}
+                onChange={e => setDraft(d => ({ ...d, resonance_window_seconds: parseInt(e.target.value) || 1 }))}
+                className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground"
+              />
+              <span className="block text-[10px] text-muted/70">每个信号分别记录时间，超过窗口未补齐则重新累计。</span>
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-[11px] text-muted">最少信号数</span>
+              <select
+                value={Math.min(draft.resonance_min_signals ?? 2, Math.max(2, selectedSignals.length))}
+                onChange={e => setDraft(d => ({ ...d, resonance_min_signals: Number(e.target.value) }))}
+                disabled={selectedSignals.length < 2}
+                className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground disabled:opacity-50"
+              >
+                {Array.from({ length: Math.max(0, selectedSignals.length - 1) }, (_, i) => i + 2).map(count => (
+                  <option key={count} value={count}>{count} 个信号</option>
+                ))}
+              </select>
+              <span className={`block text-[10px] ${selectedSignals.length < 2 ? 'text-warning' : 'text-muted/70'}`}>
+                {selectedSignals.length < 2 ? '请至少选择两个信号。' : `当前已选 ${selectedSignals.length} 个信号。`}
+              </span>
+            </label>
+          </div>
+        </div>
+      )}
+
       {/* 触发条件 (非 strategy) */}
-      {draft.type !== 'strategy' && draft.type !== 'sector' && draft.type !== 'abnormal' && draft.type !== 'volume_delta' && (
+      {draft.type !== 'strategy' && draft.type !== 'sector' && draft.type !== 'abnormal' && draft.type !== 'volume_delta' && draft.type !== 'resonance' && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-[11px] text-muted">触发条件</span>
@@ -1482,6 +1557,10 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         <label className="space-y-1.5">
           <span className="text-[11px] text-muted">冷却期(秒)</span>
           <input type="number" value={draft.cooldown_seconds} onChange={e => setDraft(d => ({ ...d, cooldown_seconds: parseInt(e.target.value) || 0 }))} min={0} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-[11px] text-muted">滚动观察窗口(秒)</span>
+          <input type="number" value={draft.rolling_window_seconds ?? 900} onChange={e => setDraft(d => ({ ...d, rolling_window_seconds: parseInt(e.target.value) || 1 }))} min={1} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
         </label>
         <label className="space-y-1.5">
           <span className="text-[11px] text-muted">严重级别</span>

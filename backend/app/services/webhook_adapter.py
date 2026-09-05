@@ -234,6 +234,7 @@ def send_feishu_card(webhook_url: str, title: str, subtitle: str, body_md: str, 
 # 企业微信群的消息可在绑定的个人微信接收, 实现"微信推送"体验。
 
 WECOM_HOOK_PREFIX = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send"
+_WECOM_MAX_ATTEMPTS = 3
 
 
 def is_valid_wecom_url(url: str) -> bool:
@@ -265,31 +266,46 @@ def normalize_wecom_url(url: str) -> str:
     return f"{WECOM_HOOK_PREFIX}?key={url}"
 
 
-def _post_wecom(webhook_url: str, payload: dict) -> bool:
+def _post_wecom(
+    webhook_url: str,
+    payload: dict,
+    max_attempts: int = _WECOM_MAX_ATTEMPTS,
+) -> bool:
     """发送一次企业微信 webhook 请求并判定成败。
 
-    成功响应: HTTP 200 且 errcode=0。失败静默返回 False。
+    成功响应: HTTP 200 且 errcode=0。网络/超时/5xx 重试, 4xx 和业务错误不重试。
     """
-    try:
-        import httpx
+    import time
 
-        resp = httpx.post(webhook_url, json=payload, timeout=5.0)
-        if resp.status_code == 200:
-            try:
-                data = resp.json()
-                if isinstance(data, dict):
-                    # errcode=0 表示成功; 45009=频率限制, 其它非零=业务失败
-                    if data.get("errcode") == 0:
-                        return True
-                    logger.warning("企业微信推送业务失败: %s", data)
-                    return False
-            except ValueError:
+    import httpx
+
+    last_err = ""
+    attempts = max(1, int(max_attempts))
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = httpx.post(webhook_url, json=payload, timeout=5.0)
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                    if isinstance(data, dict):
+                        # errcode=0 表示成功; 业务错误不重试
+                        if data.get("errcode") == 0:
+                            return True
+                        logger.warning("企业微信推送业务失败(不重试): %s", data)
+                        return False
+                except ValueError:
+                    return True
                 return True
-        logger.warning("企业微信推送 HTTP %s: %s", resp.status_code, resp.text[:200])
-        return False
-    except Exception as e:  # noqa: BLE001
-        logger.warning("企业微信 Webhook 推送失败: %s", e)
-        return False
+            last_err = f"HTTP {resp.status_code}: {resp.text[:200]}"
+            if resp.status_code < 500:
+                logger.warning("企业微信推送失败(不重试, 客户端错误): %s", last_err)
+                return False
+        except Exception as exc:  # noqa: BLE001
+            last_err = str(exc)
+        if attempt < attempts:
+            time.sleep(min(2 ** (attempt - 1), 3))
+    logger.warning("企业微信 Webhook 推送最终失败(已重试 %d 次): %s", attempts, last_err)
+    return False
 
 
 def send_wecom(webhook_url: str, title: str, body: str) -> bool:

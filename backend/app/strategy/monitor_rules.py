@@ -24,13 +24,16 @@ from pathlib import Path
 from app.services.fs_utils import atomic_write_text
 from app.strategy.custom_signals import ALLOWED_FIELDS
 from app.strategy.intraday_signals import uses_intraday_signals
+from app.strategy.alert_rule import ALERT_RULE_CONTRACT_VERSION
+from app.strategy.resonance import RESONANCE_CONTRACT_VERSION
+from app.strategy.rolling_watch import ROLLING_WATCH_CONTRACT_VERSION
 from app.strategy.watch_scope import WATCH_SCOPE_CONTRACT_VERSION
 
 logger = logging.getLogger(__name__)
 
 # ── 常量 ────────────────────────────────────────────────
 ID_RE = re.compile(r"^[a-z0-9_]{1,40}$")
-RULE_TYPES = {"strategy", "signal", "price", "market", "ladder", "sector", "abnormal", "volume_delta", "date"}
+RULE_TYPES = {"strategy", "signal", "resonance", "price", "market", "ladder", "sector", "abnormal", "volume_delta", "date"}
 SCOPES = {"symbols", "all", "sector", "watchlist_group"}
 LOGICS = {"and", "or"}
 DIRECTIONS = {"entry", "exit", "both"}
@@ -152,6 +155,36 @@ def validate(rule: dict) -> None:
         raise ValueError(
             f"scope_contract_version 不受支持: {scope_contract_version!r}"
         )
+    rolling_watch_contract_version = rule.get(
+        "rolling_watch_contract_version",
+        ROLLING_WATCH_CONTRACT_VERSION,
+    )
+    if rolling_watch_contract_version != ROLLING_WATCH_CONTRACT_VERSION:
+        raise ValueError(
+            "rolling_watch_contract_version 不受支持: "
+            f"{rolling_watch_contract_version!r}"
+        )
+    resonance_contract_version = rule.get(
+        "resonance_contract_version",
+        RESONANCE_CONTRACT_VERSION,
+    )
+    if resonance_contract_version != RESONANCE_CONTRACT_VERSION:
+        raise ValueError(
+            "resonance_contract_version 不受支持: "
+            f"{resonance_contract_version!r}"
+        )
+    alert_rule_contract_version = rule.get(
+        "alert_rule_contract_version",
+        ALERT_RULE_CONTRACT_VERSION,
+    )
+    if alert_rule_contract_version != ALERT_RULE_CONTRACT_VERSION:
+        raise ValueError(
+            "alert_rule_contract_version 不受支持: "
+            f"{alert_rule_contract_version!r}"
+        )
+    revision = rule.get("revision", 1)
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+        raise ValueError("revision 必须是正整数")
 
     # 指数规则: 仅 signal/price + symbols 作用域 + 不含分时信号
     # (指数无涨跌停/策略/封单语义; 无本地分钟K, 分时信号会静默不触发)
@@ -186,6 +219,21 @@ def validate(rule: dict) -> None:
                 raise ValueError(f"{label}必须是 0 到 100 之间的数字")
         if score_min is not None and score_max is not None and score_min > score_max:
             raise ValueError("评分下限不能大于评分上限")
+    elif rule.get("type") == "resonance":
+        conds = rule.get("conditions")
+        if not isinstance(conds, list) or len(conds) < 2 or len(conds) > 8:
+            raise ValueError("共振规则 conditions 必须是 2 到 8 条")
+        for i, condition in enumerate(conds):
+            if not isinstance(condition, dict) or condition.get("op") != "truth":
+                raise ValueError(f"共振规则第 {i + 1} 个条件必须是信号 truth 条件")
+            if not _is_signal_field(str(condition.get("field") or "")):
+                raise ValueError(f"共振规则第 {i + 1} 个条件必须是信号列")
+        minimum = rule.get("resonance_min_signals", 2)
+        if isinstance(minimum, bool) or not isinstance(minimum, int) or not 2 <= minimum <= len(conds):
+            raise ValueError("resonance_min_signals 必须在 2 到 conditions 条数之间")
+        window = rule.get("resonance_window_seconds", 300)
+        if isinstance(window, bool) or not isinstance(window, int) or window < 1:
+            raise ValueError("resonance_window_seconds 必须是正整数")
     elif rule.get("type") == "ladder":
         # 连板梯队封单监控: 需 metric + threshold + direction(up/down), 不用 conditions
         if rule.get("metric", "sealed_vol") not in LADDER_METRICS:
@@ -332,6 +380,9 @@ def validate(rule: dict) -> None:
     cd = rule.get("cooldown_seconds", 3600)
     if not isinstance(cd, int) or cd < 0:
         raise ValueError("cooldown_seconds 必须是非负整数")
+    rolling_window = rule.get("rolling_window_seconds", 900)
+    if isinstance(rolling_window, bool) or not isinstance(rolling_window, int) or rolling_window < 1:
+        raise ValueError("rolling_window_seconds 必须是正整数")
 
 
 def normalize(rule: dict) -> dict:
@@ -396,10 +447,21 @@ def normalize(rule: dict) -> dict:
         r.setdefault("remind_date", None)
         r["lead_days"] = int(r.get("lead_days") or 0)
         r["cooldown_seconds"] = 86400
+    if r.get("type") == "resonance":
+        r["logic"] = "or"
     # abnormal 专属默认字段 (异动边缘监控)
     r.setdefault("abnormal_window", "any")
     r.setdefault("logic", "and")
     r.setdefault("cooldown_seconds", 3600)
+    r.setdefault("rolling_watch_contract_version", ROLLING_WATCH_CONTRACT_VERSION)
+    r.setdefault("rolling_window_seconds", 900)
+    r.setdefault("resonance_contract_version", RESONANCE_CONTRACT_VERSION)
+    r.setdefault("resonance_window_seconds", 300)
+    r.setdefault("resonance_min_signals", 2)
+    if r.get("alert_rule_contract_version") is None:
+        r["alert_rule_contract_version"] = ALERT_RULE_CONTRACT_VERSION
+    if isinstance(r.get("revision"), bool) or not isinstance(r.get("revision"), int) or r.get("revision", 0) < 1:
+        r["revision"] = 1
     r.setdefault("severity", "info")
     r.setdefault("message", "")
     r.setdefault("webhook_url", "")
@@ -413,7 +475,10 @@ def normalize(rule: dict) -> dict:
     else:
         # 防御性过滤, 只保留合法渠道
         r["webhook_channels"] = [c for c in r["webhook_channels"] if c in ("feishu", "wecom")]
-    r.setdefault("created_at", datetime.now(timezone.utc).isoformat())
+    if not r.get("created_at"):
+        r["created_at"] = datetime.now(timezone.utc).isoformat()
+    if not r.get("updated_at"):
+        r["updated_at"] = r.get("created_at")
     return r
 
 

@@ -4,14 +4,21 @@
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.strategy import monitor_rules
+from app.strategy.alert_rule import (
+    ALERT_RULE_CONTRACT_VERSION,
+    build_alert_rule_snapshot,
+    next_revision,
+)
 from app.strategy.intraday_signals import INTRADAY_SIGNAL_LABELS, uses_intraday_signals
+from app.strategy.resonance import RESONANCE_CONTRACT_VERSION
+from app.strategy.rolling_watch import ROLLING_WATCH_CONTRACT_VERSION
 from app.strategy.watch_scope import WATCH_SCOPE_CONTRACT_VERSION, resolve_watch_scope
 
 router = APIRouter(prefix="/api/monitor-rules", tags=["monitor-rules"])
@@ -78,9 +85,15 @@ class RuleModel(BaseModel):
     id: str
     name: str
     enabled: bool = True
-    type: str          # strategy | signal | price | market | sector | abnormal
+    type: str          # strategy | signal | resonance | price | market | sector | abnormal
     asset_type: str = "stock"   # stock | etf (etf: strategy 型走 ETF 历史加载器)
     scope_contract_version: str = WATCH_SCOPE_CONTRACT_VERSION
+    rolling_watch_contract_version: str = ROLLING_WATCH_CONTRACT_VERSION
+    resonance_contract_version: str = RESONANCE_CONTRACT_VERSION
+    alert_rule_contract_version: str = ALERT_RULE_CONTRACT_VERSION
+    revision: int = 1
+    created_at: str | None = None
+    updated_at: str | None = None
     scope: str = "symbols"   # symbols | all | sector | watchlist_group
     symbols: list[str] = []
     # watchlist_group 作用域: 绑定的自选分组 id (成员动态解析, 增删自选自动生效)
@@ -99,6 +112,9 @@ class RuleModel(BaseModel):
     conditions: list[ConditionModel] = []
     logic: str = "and"        # and | or
     cooldown_seconds: int = 3600
+    rolling_window_seconds: int = 900  # 条件持续观察窗口; 超窗后重新命中可再次触发
+    resonance_window_seconds: int = 300
+    resonance_min_signals: int = 2
     # date 类型 (日期提醒): 纯日历窗口, 无 conditions
     remind_date: str | None = None   # YYYY-MM-DD
     lead_days: int = 0               # 提前 N 天进入提醒窗口
@@ -165,6 +181,7 @@ def get_options(request: Request):
         "operators": [">", ">=", "<", "<=", "==", "!="],
         "types": [
             {"key": "signal", "label": "信号"},
+            {"key": "resonance", "label": "多信号共振"},
             {"key": "price", "label": "价格/涨跌"},
             {"key": "market", "label": "市场异动"},
             {"key": "strategy", "label": "策略监控"},
@@ -180,6 +197,9 @@ def get_options(request: Request):
             {"key": "sector", "label": "板块"},
         ],
         "watch_scope_contract_version": WATCH_SCOPE_CONTRACT_VERSION,
+        "rolling_watch_contract_version": ROLLING_WATCH_CONTRACT_VERSION,
+        "resonance_contract_version": RESONANCE_CONTRACT_VERSION,
+        "alert_rule_contract_version": ALERT_RULE_CONTRACT_VERSION,
         "logics": [
             {"key": "and", "label": "全部满足 (AND)"},
             {"key": "or", "label": "任一满足 (OR)"},
@@ -258,6 +278,7 @@ def list_rules(request: Request):
     for rule in rules:
         scope = resolve_watch_scope(rule)
         rule["watch_scope"] = scope.to_dict()
+        rule["alert_rule"] = build_alert_rule_snapshot(rule)
         if scope.status == "invalid":
             reason_text = {
                 "EMPTY_SYMBOLS": "指定标的为空",
@@ -312,6 +333,8 @@ def save_rule(req: RuleModel, request: Request):
         raise HTTPException(status_code=409, detail="该规则由「持仓提醒」页托管, 请在持仓提醒页修改")
     if existing and existing.get("created_at"):
         rule["created_at"] = existing["created_at"]
+    rule["revision"] = next_revision(existing)
+    rule["updated_at"] = datetime.now(timezone.utc).isoformat()
     try:
         monitor_rules.validate(rule)
     except ValueError as e:
@@ -361,6 +384,7 @@ def save_rule(req: RuleModel, request: Request):
     return {
         "ok": True,
         "rule": rule,
+        "rule_snapshot": build_alert_rule_snapshot(rule),
         "watch_scope": resolve_watch_scope(rule).to_dict(),
     }
 
@@ -672,6 +696,7 @@ def trigger_ladder(request: Request):
             "logic": "and",
             "sealed_value": cur_val,
             "sealed_metric": metric,
+            "alert_rule": build_alert_rule_snapshot(rule),
         })
 
     if not rule_events:
@@ -691,6 +716,7 @@ def trigger_ladder(request: Request):
             "message": ev["message"], "price": ev["price"], "change_pct": ev["change_pct"],
             "signals": ev["signals"], "severity": ev["severity"],
             "conditions": ev["conditions"], "logic": ev["logic"],
+            "alert_rule": ev.get("alert_rule"),
         } for ev in rule_events]
         try:
             quote_svc.push_alerts(sse_alerts)

@@ -176,7 +176,7 @@
     <div id="empty" class="empty">没有匹配的任务。可以换一个关键词或筛选条件。</div>
 
     <footer class="footer">
-      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；Phase 5 已完成，<code>TASK-0601 Watch Scope</code> 已完成，下一步进入 <code>TASK-0602</code>。
+      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；Phase 6 已完成，下一步进入 <code>TASK-0701</code>。
     </footer>
   </main>
 
@@ -215,10 +215,10 @@
       ["Phase 5", "回测与市场规则", "TASK-0504", "Backtest Provenance", "done", "记录数据、指标、策略、参数和结果的完整来源链。", "backend/app/backtest/contracts.py; backend/app/backtest/worker.py; backend/app/backtest/strategy.py; backend/app/backtest/factor.py; docs/tasks/TASK-0504-backtest-provenance.md", "已完成：策略、因子、旧信号、批量和 worker lineage 均可序列化记录。", "feat/0504-backtest-provenance"],
 
       ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0601", "Watch Scope", "done", "统一全市场、标的、自选分组和动态作用域。", "backend/app/strategy/watch_scope.py; backend/app/strategy/monitor.py; backend/app/api/monitor_rules.py; backend/tests/test_watch_scope_contract.py; docs/tasks/TASK-0601-watch-scope.md", "已完成：WatchScope 版本化快照、来源 revision、失效原因和按标的精确状态失效已落地；33 个监控回归通过。", "feat/0601-watch-scope"],
-      ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0602", "Rolling Watch", "partial", "实现滚动观察窗口、状态迁移和跨轮询去重。", "MonitorRuleEngine cooldown/state", "补 rolling watch 独立状态契约。", "feat/0602-rolling-watch"],
-      ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0603", "Resonance", "partial", "统一多信号共振、触发窗口和边缘状态。", "intraday_signals.py; abnormal moves; monitor rules", "补 resonance 输入、输出和去重测试。", "feat/0603-resonance"],
-      ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0604", "Alert Rule", "partial", "统一监控 DSL、条件、冷却、状态和触发记录。", "api/monitor_rules.py; strategy/monitor.py", "与现有规则兼容收敛，不建第二套引擎。", "feat/0604-alert-rule"],
-      ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0605", "Alert Delivery", "partial", "统一站内、语音、Webhook、飞书和企微投递状态。", "webhook_adapter.py; SSE; notifications", "补失败重试、状态和审计记录。", "feat/0605-alert-delivery"],
+      ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0602", "Rolling Watch", "done", "实现滚动观察窗口、状态迁移和跨轮询去重。", "backend/app/strategy/rolling_watch.py; backend/app/strategy/monitor.py; backend/app/strategy/monitor_rules.py; backend/app/api/monitor_rules.py; backend/app/services/quote_service.py; backend/tests/test_rolling_watch.py; docs/tasks/TASK-0602-rolling-watch.md", "已完成：版本化状态合同、active/inactive 迁移、超窗失效、冷却抑制和跨轮询去重已落地；37 个监控回归通过。", "feat/0602-rolling-watch"],
+      ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0603", "Resonance", "done", "统一多信号共振、触发窗口和边缘状态。", "backend/app/strategy/resonance.py; backend/app/strategy/monitor.py; backend/app/api/monitor_rules.py; frontend/src/components/monitor/RuleEditor.tsx; backend/tests/test_resonance.py; docs/tasks/TASK-0603-resonance.md", "已完成：独立信号时间戳、pending/active/expired、窗口重置、冷却去重和 resonance 事件快照已落地。", "feat/0603-resonance"],
+      ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0604", "Alert Rule", "done", "统一监控 DSL、条件、冷却、状态和触发记录。", "backend/app/strategy/alert_rule.py; backend/app/strategy/monitor_rules.py; backend/app/api/monitor_rules.py; backend/app/strategy/monitor.py; docs/tasks/TASK-0604-alert-rule.md", "已完成：版本化 AlertRule 快照、旧规则兼容、保存 revision 和全告警入口快照已落地，未新增第二套引擎。", "feat/0604-alert-rule"],
+      ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0605", "Alert Delivery", "done", "统一站内、语音、Webhook、飞书和企微投递状态。", "backend/app/services/alert_delivery.py; backend/app/services/webhook_adapter.py; backend/app/services/quote_service.py; backend/app/api/alerts.py; backend/tests/test_alert_delivery.py; docs/tasks/TASK-0605-alert-delivery.md", "已完成：渠道独立 queued/sent/failed/skipped 审计、规则 revision 关联、企微重试边界和诊断 API 已落地。", "feat/0605-alert-delivery"],
 
       ["Phase 7", "Market Regime", "TASK-0701", "Market Regime", "partial", "统一情绪阶段、市场宽度、覆盖率和 partial 状态。", "services/market_phase.py; api/regime.py", "对齐 coverage/partial 与质量状态。", "feat/0701-market-regime"],
       ["Phase 7", "Market Regime", "TASK-0702", "Breadth / Money Effect", "partial", "统一市场宽度、涨跌家数、资金效应和主线输入。", "market phase/mainline services", "统一输入数据源和缺失处理。", "feat/0702-breadth-money-effect"],
@@ -334,7 +334,7 @@
       document.getElementById("percent").textContent = `${percent.toFixed(1)}%`;
       document.querySelector(".ring").style.setProperty("--progress", `${percent}%`);
       document.getElementById("summary-title").textContent = `${counts.done}/${tasks.length} 个任务已完成`;
-      document.getElementById("summary-text").textContent = `当前阶段：TASK-0602 · Rolling Watch。TASK-0501 至 TASK-0504 已完成；TASK-0601 Watch Scope 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
+      document.getElementById("summary-text").textContent = `当前阶段：TASK-0701 · Market Regime。TASK-0501 至 TASK-0504 已完成；Phase 6 的 TASK-0601 至 TASK-0605 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
     }
 
     document.querySelectorAll("[data-filter]").forEach(button => {

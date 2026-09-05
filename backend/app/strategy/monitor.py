@@ -23,9 +23,15 @@ import polars as pl
 
 from app.market_time import cn_today
 from app.strategy import config as _strategy_config
+from app.strategy.alert_rule import build_alert_rule_snapshot
 from app.strategy.custom_signals import _OP_BUILDERS  # type: ignore  # 复用运算符构造器
 from app.strategy.intraday_signals import INTRADAY_SIGNAL_LABELS, uses_intraday_signals
 from app.strategy.monitor_rules import date_rule_in_window
+from app.strategy.resonance import ResonanceState, advance_resonance
+from app.strategy.rolling_watch import (
+    RollingWatchState,
+    advance_rolling_watch,
+)
 from app.strategy.watch_scope import WatchScope, resolve_watch_scope
 
 logger = logging.getLogger(__name__)
@@ -324,6 +330,11 @@ class MonitorRuleEngine:
         # 每条规则最近一次解析出的作用域快照。动态分组 revision 变化时,
         # 只失效离开作用域的标的状态, 避免整组 cooldown 被无条件清空。
         self._scope_snapshots: dict[str, WatchScope] = {}
+        # 普通行情规则的滚动观察状态: (rule_id, symbol, event_type) -> state。
+        # 与 _last_fire 分离, 使状态去重不被 cooldown 时间语义污染。
+        self._rolling_watch_states: dict[tuple[str, str, str], RollingWatchState] = {}
+        # 共振状态: (rule_id, symbol) -> 滚动窗口内的信号时间集合。
+        self._resonance_states: dict[tuple[str, str], ResonanceState] = {}
 
     def set_strategy_engine(self, engine) -> None:
         """注入 StrategyEngine, type=strategy 规则据此跑选股。"""
@@ -346,6 +357,8 @@ class MonitorRuleEngine:
         self._latest_strategy_result_ids.clear()
         self._active_matrix_snapshots.clear()
         self._scope_snapshots.clear()
+        self._rolling_watch_states.clear()
+        self._resonance_states.clear()
 
     def set_history_loader(self, fn) -> None:
         """注入历史窗口加载器, 用于声明 filter_history 的策略跑实时监控。
@@ -404,6 +417,14 @@ class MonitorRuleEngine:
             key: value for key, value in self._abnormal_condition_state.items()
             if key[0] != rule_id
         }
+        self._rolling_watch_states = {
+            key: value for key, value in self._rolling_watch_states.items()
+            if key[0] != rule_id
+        }
+        self._resonance_states = {
+            key: value for key, value in self._resonance_states.items()
+            if key[0] != rule_id
+        }
 
     def _resolve_scope(self, rule: dict) -> WatchScope:
         """Resolve and reconcile one rule's scope before evaluation."""
@@ -442,6 +463,16 @@ class MonitorRuleEngine:
                         for key, value in self._abnormal_condition_state.items()
                         if not (key[0] == rule_id and key[1] in removed)
                     }
+                    self._rolling_watch_states = {
+                        key: value
+                        for key, value in self._rolling_watch_states.items()
+                        if not (key[0] == rule_id and key[1] in removed)
+                    }
+                    self._resonance_states = {
+                        key: value
+                        for key, value in self._resonance_states.items()
+                        if not (key[0] == rule_id and key[1] in removed)
+                    }
         self._scope_snapshots[rule_id] = scope
         return scope
 
@@ -466,6 +497,7 @@ class MonitorRuleEngine:
             tuple(sorted(str(symbol) for symbol in rule.get("symbols", []))),
             rule.get("group_id"),
             rule.get("scope_contract_version", "1.0"),
+            rule.get("rolling_watch_contract_version", "1.0"),
             rule.get("sector"),
             rule.get("sector_kind"),
             tuple(sorted(str(target.get("key")) for target in rule.get("sector_targets", []))),
@@ -476,6 +508,10 @@ class MonitorRuleEngine:
             rule.get("abnormal_window"),
             rule.get("remind_date"),
             rule.get("lead_days"),
+            rule.get("rolling_window_seconds", 900),
+            rule.get("resonance_contract_version", "1.0"),
+            rule.get("resonance_window_seconds", 300),
+            rule.get("resonance_min_signals", 2),
         )
 
     def set_rules(self, rules: list[dict]) -> None:
@@ -523,6 +559,16 @@ class MonitorRuleEngine:
             for key, value in list(self._abnormal_condition_state.items())
             if key[0] in active_ids
         }
+        self._rolling_watch_states = {
+            key: value
+            for key, value in list(self._rolling_watch_states.items())
+            if key[0] in active_ids
+        }
+        self._resonance_states = {
+            key: value
+            for key, value in list(self._resonance_states.items())
+            if key[0] in active_ids
+        }
         self._scope_snapshots = {
             key: value for key, value in self._scope_snapshots.items()
             if key in active_ids
@@ -566,6 +612,12 @@ class MonitorRuleEngine:
         self._abnormal_condition_state = {
             k: v for k, v in self._abnormal_condition_state.items() if k[0] != rule_id
         }
+        self._rolling_watch_states = {
+            k: v for k, v in self._rolling_watch_states.items() if k[0] != rule_id
+        }
+        self._resonance_states = {
+            k: v for k, v in self._resonance_states.items() if k[0] != rule_id
+        }
         self._rules_version += 1
 
     def clear(self) -> None:
@@ -577,6 +629,8 @@ class MonitorRuleEngine:
         self._strategy_signal_seen.clear()
         self._sector_condition_state.clear()
         self._abnormal_condition_state.clear()
+        self._rolling_watch_states.clear()
+        self._resonance_states.clear()
         self._rules_version += 1
 
     @property
@@ -586,6 +640,20 @@ class MonitorRuleEngine:
     @property
     def rule_count(self) -> int:
         return len(self._rules)
+
+    def rolling_watch_states(self) -> dict[tuple[str, str, str], dict[str, Any]]:
+        """Return a serializable snapshot of rolling watch runtime state."""
+        return {
+            key: state.to_dict()
+            for key, state in self._rolling_watch_states.items()
+        }
+
+    def resonance_states(self) -> dict[tuple[str, str], dict[str, Any]]:
+        """Return a serializable snapshot of resonance runtime state."""
+        return {
+            key: state.to_dict()
+            for key, state in self._resonance_states.items()
+        }
 
     def latest_strategy_results(self) -> dict[str, dict]:
         """返回本轮 evaluate() 产出的策略选股结果 (strategy_id → {rows, total, as_of})。
@@ -824,6 +892,7 @@ class MonitorRuleEngine:
                 "conditions": [],
                 "logic": "and",
                 "watch_scope": scope.to_dict(),
+                "alert_rule": build_alert_rule_snapshot(rule),
             }
             events.append(ev)
             if self._alert_handler:
@@ -942,6 +1011,7 @@ class MonitorRuleEngine:
                 "up_count": snapshot.get("up_count"),
                 "down_count": snapshot.get("down_count"),
                 "leader": snapshot.get("leader"),
+                "alert_rule": build_alert_rule_snapshot(rule),
             }
             events.append(event)
             if self._alert_handler:
@@ -1087,6 +1157,7 @@ class MonitorRuleEngine:
                 "abnormal_value": round(best[2], 4),
                 "abnormal_threshold": best[3],
                 "abnormal_closeness": round(best[1], 4),
+                "alert_rule": build_alert_rule_snapshot(rule),
             }
             events.append(event)
             if self._alert_handler:
@@ -1124,11 +1195,15 @@ class MonitorRuleEngine:
         # 2. 根据 type 构建命中集
         #    元组格式: (event_type, symbol, name, price, pct, signals)
         hit_rows: list[tuple[str, str, Any, Any, Any, list[str]]] = []
+        rolling_states: dict[tuple[str, str], dict[str, Any]] = {}
+        resonance_states: dict[tuple[str, str], dict[str, Any]] = {}
 
         rtype = rule.get("type", "signal")
         if rtype == "strategy":
             # 策略类型: 跑策略选股, 同时产出所选的信号和结果池变更事件
             hit_rows = self._match_strategy(scoped, rule)
+        elif rtype == "resonance":
+            hit_rows, resonance_states = self._match_resonance(scoped, rule, now)
         elif rtype == "ladder":
             # 连板梯队封单监控: 独立处理 (需带预警封单值, 走专属 message)
             return self._attach_scope(self._evaluate_ladder(scoped, rule, now), scope)
@@ -1139,6 +1214,9 @@ class MonitorRuleEngine:
             # signal / price / market: 通用条件匹配
             for sym, name, price, pct, hit_sigs in self._match_conditions(scoped, rule):
                 hit_rows.append((rtype, sym, name, price, pct, hit_sigs))
+            hit_rows, rolling_states = self._advance_rolling_watch(
+                scoped, rule, hit_rows, now,
+            )
 
         if not hit_rows:
             return []
@@ -1190,7 +1268,14 @@ class MonitorRuleEngine:
                 "conditions": list(rule.get("conditions", [])) if rtype != "strategy" else [],
                 "logic": rule.get("logic", "and") if rtype != "strategy" else "and",
                 "watch_scope": scope.to_dict(),
+                "alert_rule": build_alert_rule_snapshot(rule),
             }
+            rolling_state = rolling_states.get((ev_type, sym))
+            if rolling_state is not None:
+                ev["rolling_watch"] = rolling_state
+            resonance_state = resonance_states.get((ev_type, sym))
+            if resonance_state is not None:
+                ev["resonance"] = resonance_state
             events.append(ev)
             if self._alert_handler:
                 try:
@@ -1199,6 +1284,133 @@ class MonitorRuleEngine:
                     logger.warning("alert handler failed: %s", e)
 
         return events
+
+    def _match_resonance(
+        self,
+        scoped: pl.DataFrame,
+        rule: dict,
+        now: float,
+    ) -> tuple[list[tuple[str, str, Any, Any, Any, list[str]]], dict[tuple[str, str], dict[str, Any]]]:
+        """Match a multi-signal rule across a rolling time window."""
+        rule_id = str(rule.get("id", ""))
+        conditions = [
+            condition for condition in rule.get("conditions", [])
+            if isinstance(condition, dict) and condition.get("op") == "truth"
+        ]
+        signal_fields = [str(condition.get("field")) for condition in conditions]
+        window_seconds = int(rule.get("resonance_window_seconds", 300))
+        min_signals = int(rule.get("resonance_min_signals", 2))
+        cooldown_seconds = int(rule.get("cooldown_seconds", 3600))
+        results: list[tuple[str, str, Any, Any, Any, list[str]]] = []
+        states: dict[tuple[str, str], dict[str, Any]] = {}
+        observed_symbols: set[str] = set()
+
+        for row in scoped.iter_rows(named=True):
+            symbol = str(row.get("symbol") or "")
+            if not symbol:
+                continue
+            observed_symbols.add(symbol)
+            observed = {
+                field for field in signal_fields if bool(row.get(field))
+            }
+            key = (rule_id, symbol)
+            advanced = advance_resonance(
+                self._resonance_states.get(key),
+                rule_id=rule_id,
+                symbol=symbol,
+                observed_signals=observed,
+                now=now,
+                window_seconds=window_seconds,
+                min_signals=min_signals,
+                cooldown_seconds=cooldown_seconds,
+            )
+            self._resonance_states[key] = advanced.state
+            if not advanced.should_trigger:
+                continue
+            state = advanced.state.to_dict()
+            states[("resonance", symbol)] = state
+            results.append((
+                "resonance",
+                symbol,
+                row.get("name"),
+                row.get("close"),
+                row.get("change_pct"),
+                list(advanced.state.active_signals),
+            ))
+
+        # A state older than the resonance window cannot keep an active edge
+        # alive. Drop it even when the symbol was absent from this snapshot;
+        # the next fresh multi-signal observation must be a new entry.
+        stale_before = now - max(1, window_seconds)
+        self._resonance_states = {
+            key: value
+            for key, value in self._resonance_states.items()
+            if key[0] != rule_id
+            or value.last_signal_at is None
+            or value.last_signal_at >= stale_before
+        }
+        return results, states
+
+    def _advance_rolling_watch(
+        self,
+        scoped: pl.DataFrame,
+        rule: dict,
+        hit_rows: list[tuple[str, str, Any, Any, Any, list[str]]],
+        now: float,
+    ) -> tuple[list[tuple[str, str, Any, Any, Any, list[str]]], dict[tuple[str, str], dict[str, Any]]]:
+        """Advance ordinary rule state once per observed symbol.
+
+        Only a false observation closes a watch immediately.  Symbols absent
+        from a poll remain active until their rolling window expires, which
+        prevents transient provider gaps from creating false re-entries.
+        """
+        rule_id = str(rule.get("id", ""))
+        event_type = str(rule.get("type", "signal"))
+        window_seconds = int(rule.get("rolling_window_seconds", 900))
+        cooldown_seconds = int(rule.get("cooldown_seconds", 3600))
+        hit_by_symbol = {str(row[1]): row for row in hit_rows}
+        observed_symbols = {
+            str(symbol)
+            for symbol in scoped.get_column("symbol").to_list()
+            if symbol is not None and str(symbol)
+        } if "symbol" in scoped.columns else set()
+
+        # Advance rows present in this snapshot, including non-matches, so a
+        # threshold falling back below the condition re-arms the next entry.
+        for symbol in observed_symbols:
+            key = (rule_id, symbol, event_type)
+            advance = advance_rolling_watch(
+                self._rolling_watch_states.get(key),
+                rule_id=rule_id,
+                symbol=symbol,
+                event_type=event_type,
+                matched=symbol in hit_by_symbol,
+                now=now,
+                window_seconds=window_seconds,
+                cooldown_seconds=cooldown_seconds,
+            )
+            self._rolling_watch_states[key] = advance.state
+            if symbol in hit_by_symbol and advance.should_trigger:
+                continue
+            if symbol in hit_by_symbol:
+                hit_by_symbol.pop(symbol, None)
+
+        # Keep the runtime map bounded and make a long provider gap expire a
+        # watch before the next matching row is evaluated.
+        stale_before = now - window_seconds
+        self._rolling_watch_states = {
+            key: value
+            for key, value in self._rolling_watch_states.items()
+            if key[0] != rule_id
+            or value.last_seen_at is None
+            or value.last_seen_at >= stale_before
+        }
+        states = {
+            (event_type, symbol): state.to_dict()
+            for symbol, row in hit_by_symbol.items()
+            if (state := self._rolling_watch_states.get((rule_id, symbol, event_type))) is not None
+        }
+        return list(hit_by_symbol.values()), states
 
     @staticmethod
     def _apply_scope(
@@ -1600,6 +1812,7 @@ class MonitorRuleEngine:
                 "severity": severity,
                 "conditions": [],
                 "logic": "and",
+                "alert_rule": build_alert_rule_snapshot(rule),
                 "volume_delta": delta,
                 "volume_delta_span": round(span_s, 1),
             }
@@ -1713,6 +1926,7 @@ class MonitorRuleEngine:
                 "logic": "and",
                 "sealed_value": sealed_value,   # 预警封单量/额 (飞书+记录展示)
                 "sealed_metric": metric,
+                "alert_rule": build_alert_rule_snapshot(rule),
             })
         return events
 
