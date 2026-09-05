@@ -176,7 +176,7 @@
     <div id="empty" class="empty">没有匹配的任务。可以换一个关键词或筛选条件。</div>
 
     <footer class="footer">
-      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；Phase 4 已完成，当前进入 <code>TASK-0501</code>。
+      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；Phase 5 已完成，下一步进入 Phase 6 <code>TASK-0601</code>。
     </footer>
   </main>
 
@@ -209,10 +209,10 @@
       ["Phase 4", "策略合同与 EOD 执行", "TASK-0404", "EOD Runner", "done", "编排盘后数据、指标、策略和候选的执行任务。", "backend/app/services/eod_runner.py; backend/app/jobs/daily_pipeline.py; backend/app/api/strategy.py; docs/tasks/TASK-0404-eod-runner.md", "已完成：复用既有数据/策略服务，盘后生成候选种子并报告阶段失败。", "feat/0301-indicator-spec"],
       ["Phase 4", "策略合同与 EOD 执行", "TASK-0405", "Strategy Lifecycle", "done", "处理策略创建、发布、停用、复制、删除和回滚。", "backend/app/strategy/lifecycle.py; backend/app/strategy/engine.py; backend/app/api/strategy.py; docs/tasks/TASK-0405-strategy-lifecycle.md", "已完成：生命周期状态机、源码 revision、复制、删除和安全回滚。", "feat/0301-indicator-spec"],
 
-      ["Phase 5", "回测与市场规则", "TASK-0501", "Backtest Data", "partial", "统一回测数据加载、窗口、资产类型和时间可得性。", "backtest/engine.py; backtest/strategy.py", "补 data contract 和可得性证明。", "feat/0501-backtest-data"],
-      ["Phase 5", "回测与市场规则", "TASK-0502", "CN Market Rules", "partial", "固化 T+1、涨跌停、费用、滑点和不可成交规则。", "price_limits.py; backtest/engine.py", "增加市场规则 golden fixtures。", "test/0502-cn-market-rules"],
-      ["Phase 5", "回测与市场规则", "TASK-0503", "Validation Gate", "partial", "对区间、数据覆盖、分钟精度和策略输入做 fail-closed 校验。", "api/backtest.py 的区间与分钟覆盖守卫", "统一可记录的拒绝原因。", "feat/0503-validation-gate"],
-      ["Phase 5", "回测与市场规则", "TASK-0504", "Backtest Provenance", "partial", "记录数据、指标、策略、参数和结果的完整来源链。", "回测交易记录; research candidates provenance", "补完整 provenance。", "feat/0504-backtest-provenance"],
+      ["Phase 5", "回测与市场规则", "TASK-0501", "Backtest Data", "done", "统一回测数据加载、窗口、资产类型和时间可得性。", "backend/app/backtest/contracts.py; backend/app/backtest/engine.py; backend/app/backtest/factor.py; backend/app/backtest/strategy.py; docs/tasks/TASK-0501-backtest-data.md", "已完成：统一 requested/load/warmup/simulation/forward 覆盖并校验 generation；缺少前瞻交易日时 fail-closed。", "feat/0501-backtest-data"],
+      ["Phase 5", "回测与市场规则", "TASK-0502", "CN Market Rules", "done", "固化 T+1、涨跌停、费用、滑点和不可成交规则。", "backend/app/price_limits.py; backend/app/backtest/engine.py; backend/tests/test_price_limits.py; docs/tasks/TASK-0502-cn-market-rules.md", "已完成：市场规则版本化并记录 stock/ETF 资产边界；既有撮合语义保持不变。", "feat/0502-cn-market-rules"],
+      ["Phase 5", "回测与市场规则", "TASK-0503", "Validation Gate", "done", "对区间、数据覆盖、分钟精度和策略输入做 fail-closed 校验。", "backend/app/backtest/contracts.py; backend/app/api/backtest.py; backend/app/backtest/factor.py; docs/tasks/TASK-0503-validation-gate.md", "已完成：结果、HTTP 守卫和 SSE 错误均返回统一 validation code，并保留旧 error/message。", "feat/0503-validation-gate"],
+      ["Phase 5", "回测与市场规则", "TASK-0504", "Backtest Provenance", "done", "记录数据、指标、策略、参数和结果的完整来源链。", "backend/app/backtest/contracts.py; backend/app/backtest/worker.py; backend/app/backtest/strategy.py; backend/app/backtest/factor.py; docs/tasks/TASK-0504-backtest-provenance.md", "已完成：策略、因子、旧信号、批量和 worker lineage 均可序列化记录。", "feat/0504-backtest-provenance"],
 
       ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0601", "Watch Scope", "partial", "统一全市场、标的、自选分组和动态作用域。", "strategy/monitor.py::MonitorRuleEngine", "固化 scope 版本和失效语义。", "feat/0601-watch-scope"],
       ["Phase 6", "Watch、Alert 与 Delivery", "TASK-0602", "Rolling Watch", "partial", "实现滚动观察窗口、状态迁移和跨轮询去重。", "MonitorRuleEngine cooldown/state", "补 rolling watch 独立状态契约。", "feat/0602-rolling-watch"],
@@ -334,7 +334,7 @@
       document.getElementById("percent").textContent = `${percent.toFixed(1)}%`;
       document.querySelector(".ring").style.setProperty("--progress", `${percent}%`);
       document.getElementById("summary-title").textContent = `${counts.done}/${tasks.length} 个任务已完成`;
-      document.getElementById("summary-text").textContent = `当前阶段：TASK-0501 · Backtest Data。TASK-0401 至 TASK-0405 已完成；TASK-0301 至 TASK-0304 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
+      document.getElementById("summary-text").textContent = `当前阶段：TASK-0601 · Watch Scope。TASK-0501 至 TASK-0504 已完成；TASK-0401 至 TASK-0405 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
     }
 
     document.querySelectorAll("[data-filter]").forEach(button => {

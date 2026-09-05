@@ -375,6 +375,8 @@ class BacktestEngine:
         end: date,
         feature_plan,
         asset_type: str = "stock",
+        *,
+        expected_generation: str | None = None,
     ) -> pl.DataFrame:
         """按解析后的依赖加载窄基础列并计算回测所需特征。"""
         from app.indicators.pipeline import (
@@ -389,6 +391,7 @@ class BacktestEngine:
             end,
             columns=sorted(feature_plan.base_columns),
             asset_type=asset_type,
+            expected_generation=expected_generation,
         )
         if df.is_empty():
             return df

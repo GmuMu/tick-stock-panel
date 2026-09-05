@@ -14,6 +14,24 @@ MAIN_BOARD_LIMIT = 0.10
 LEGACY_MAIN_BOARD_ST_LIMIT = 0.05
 GROWTH_BOARD_LIMIT = 0.20
 BEIJING_BOARD_LIMIT = 0.30
+MARKET_RULES_VERSION = "cn_a_share_2026_07_v1"
+
+
+def market_rules_contract(asset_type: str = "stock") -> dict[str, object]:
+    """Return the versioned rule metadata attached to backtest provenance."""
+    return {
+        "version": MARKET_RULES_VERSION,
+        "asset_type": asset_type,
+        "board_limits": {
+            "main": MAIN_BOARD_LIMIT,
+            "growth_and_star": GROWTH_BOARD_LIMIT,
+            "beijing": BEIJING_BOARD_LIMIT,
+        },
+        "legacy_main_board_st_limit": LEGACY_MAIN_BOARD_ST_LIMIT,
+        "st_change_date": MAIN_BOARD_ST_LIMIT_CHANGE_DATE.isoformat(),
+        "t_plus_one": asset_type == "stock",
+        "stamp_tax_sell_only": asset_type == "stock",
+    }
 
 
 def is_risk_warning_name(name: str | None) -> bool:

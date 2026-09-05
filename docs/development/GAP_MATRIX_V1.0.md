@@ -65,10 +65,10 @@
 
 | Task | 状态 | 真实证据 / 入口 | 下一步 |
 | --- | --- | --- | --- |
-| TASK-0501 | PARTIAL | `backtest.engine`、`backtest.strategy`、`backtest.matrix` 已实现数据加载与撮合 | 统一 backtest data contract 和时间可得性证明 |
-| TASK-0502 | PARTIAL | `price_limits.py`、`backtest.engine` 已处理 T+1、涨跌停、手续费、滑点 | 增加市场规则 golden fixtures，明确资产类型边界 |
-| TASK-0503 | PARTIAL | 回测 API 有区间/分钟覆盖守卫和错误返回 | 将 validation gate 统一为可记录的拒绝原因 |
-| TASK-0504 | PARTIAL | 回测交易记录、候选 provenance、数据 generation 已存在但未统一 | 增加完整 data/indicator/strategy provenance |
+| TASK-0501 | DONE | `backtest/contracts.py`、`backtest/engine.py`、`backtest/factor.py`、`backtest/strategy.py`、`services/backtest.py` 已统一窗口、warmup、forward tail、资产类型和 generation | 保持合同版本兼容，后续按新数据源补充 fixture |
+| TASK-0502 | DONE | `price_limits.py` 提供版本化市场规则快照；策略、因子和旧信号结果均记录规则；既有撮合测试覆盖 T+1/涨跌停/成本/ETF 边界 | 后续仅在交易所规则变化时增版本 |
+| TASK-0503 | DONE | 回测结果和 API/SSE 守卫统一返回 `validation`，覆盖范围、分钟能力、无信号、取消和 generation 变更拒绝码 | 新增入口必须复用 `BacktestValidation` |
+| TASK-0504 | DONE | 策略、因子、旧信号、批量因子和 worker 均记录 `BacktestProvenance`；包含数据、指标、策略、参数、撮合、规则和 worker lineage | 后续扩展运行环境字段，不改变已有字段 |
 
 ## Phase 6：Watch、Alert 与 Delivery
 
@@ -157,7 +157,7 @@
 
 ## 执行结论
 
-1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0205`、`TASK-0301` 至 `TASK-0304` 和 `TASK-0401` 至 `TASK-0405` 已完成，当前分支为 `feat/0301-indicator-spec`；下一步进入 Phase 5 `TASK-0501`，Sequoia-X 的 `PrivatePlacement` 因公司行为数据缺口暂不实现。
+1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0205`、`TASK-0301` 至 `TASK-0304`、`TASK-0401` 至 `TASK-0405` 和 Phase 5 `TASK-0501` 至 `TASK-0504` 已完成，当前分支为 `feat/0301-indicator-spec`；Sequoia-X 的 `PrivatePlacement` 因公司行为数据缺口暂不实现。
 2. `full_minute` YAML 解析断点仍是已确认缺口，依赖它的自定义全量分钟任务不得宣称端到端完成。
 3. 交易、OMS、QMT 和实盘相关任务全部保持 `GAP/BLOCKED`，在没有风险、幂等、审计和 Kill Switch 之前不接真实交易。
 4. 以后每个 Task 必须先补契约测试，再实现代码；完成后更新对应 `docs/tasks/TASK-xxxx-*.md`，不以“页面能打开”代替验收。

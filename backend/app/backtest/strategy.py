@@ -20,6 +20,14 @@ import numpy as np
 import polars as pl
 
 from app.backtest.engine import BacktestEngine, MatcherConfig, SimResult, SimulationOptions
+from app.backtest.contracts import (
+    BacktestProvenance,
+    BacktestValidation,
+    accepted_validation,
+    coverage_from_labels,
+    rejected_validation,
+    utc_now,
+)
 from app.backtest.fundamentals import FUNDAMENTAL_FACTOR_NAMES
 from app.backtest.matrix import (
     MarketDataMatrix,
@@ -60,16 +68,34 @@ from app.strategy.scoring import (
     scoring_value_expr,
     scoring_warmup_bars,
 )
+from app.indicators.spec import INDICATOR_SPEC_VERSION
+from app.price_limits import MARKET_RULES_VERSION, market_rules_contract
 
 logger = logging.getLogger(__name__)
 
 BENCHMARK_SYMBOL = "000001.SH"
+_VALIDATION_CODES = {
+    "正式回测区间内无数据": "NO_FORMAL_DATA",
+    "在指定区间内未产生买入信号": "NO_SIGNALS",
+    "矩阵回测缺少基础行情矩阵": "NO_DATA",
+}
 _EXECUTION_COLUMNS = frozenset({
     "symbol", "date", "open", "high", "low", "close", "volume",
     "name", "score", "signal_limit_up", "signal_limit_down",
 })
 _LIMIT_BASE_COLUMNS = frozenset({"raw_close", "raw_high", "raw_low"})
 _INSTRUMENT_COLUMNS = frozenset({"name", "total_shares", "float_shares"})
+
+
+def _validation_code(message: str) -> str:
+    for prefix, code in _VALIDATION_CODES.items():
+        if message.startswith(prefix):
+            return code
+    if "数据发生变化" in message or "generation" in message:
+        return "DATA_GENERATION_CHANGED"
+    if "分钟K" in message:
+        return "MINUTE_COVERAGE_MISSING"
+    return "BACKTEST_REJECTED"
 
 
 @dataclass(frozen=True)
@@ -593,6 +619,8 @@ class StrategyBacktestResult:
     strategy_info: dict = field(default_factory=dict)
     elapsed_ms: float = 0.0
     error: str | None = None
+    validation: dict = field(default_factory=lambda: accepted_validation().to_dict())
+    provenance: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -682,6 +710,130 @@ class StrategyBacktestService:
     ) -> None:
         self.engine = engine
         self.strategy_engine = strategy_engine
+
+    def _data_generation(self, asset_type: str) -> str | None:
+        loader = getattr(self.engine, "data_generation", None)
+        value = loader(asset_type) if callable(loader) else None
+        return value if value is None or isinstance(value, str) else None
+
+    def _assert_data_generation(self, asset_type: str, expected: str | None) -> None:
+        verifier = getattr(self.engine, "assert_data_generation", None)
+        if callable(verifier):
+            verifier(asset_type, expected)
+
+    @staticmethod
+    def _result_provenance(
+        config: StrategyBacktestConfig,
+        run_id: str,
+        started_at: str,
+        *,
+        coverage: dict,
+        strategy: StrategyDef | None = None,
+        validation: BacktestValidation | None = None,
+        elapsed_ms: float | None = None,
+        execution_config: dict | None = None,
+        data_generation: str | None = None,
+    ) -> dict:
+        contract = getattr(strategy, "contract", None)
+        contract_provenance = getattr(contract, "provenance", {}) or {}
+        strategy_version = (
+            getattr(strategy, "strategy_version", None)
+            or getattr(contract, "strategy_version", None)
+            or str(getattr(strategy, "meta", {}).get("version", "1.0.0"))
+            if strategy is not None
+            else None
+        )
+        revision = contract_provenance.get("source_revision")
+        try:
+            revision = int(revision) if revision is not None else None
+        except (TypeError, ValueError):
+            revision = None
+        validation = validation or accepted_validation()
+        return BacktestProvenance(
+            run_id=run_id,
+            engine="strategy_backtest",
+            asset_type=config.asset_type,
+            data_generation=data_generation,
+            data_coverage=coverage,
+            data_source="enriched_parquet",
+            storage_path=coverage.get("storage_path"),
+            indicator_version=INDICATOR_SPEC_VERSION,
+            strategy_id=(strategy.meta.get("id", config.strategy_id) if strategy else config.strategy_id),
+            strategy_version=strategy_version,
+            strategy_revision=revision,
+            parameters=dict(config.params or {}),
+            overrides=dict(config.overrides or {}),
+            market_rules_version=MARKET_RULES_VERSION,
+            execution_config=execution_config or {},
+            validation=validation.to_dict(),
+            started_at=started_at,
+            finished_at=utc_now(),
+            elapsed_ms=elapsed_ms,
+        ).to_dict()
+
+    @staticmethod
+    def _empty_coverage(config: StrategyBacktestConfig, generation: str | None) -> dict:
+        return coverage_from_labels(
+            (),
+            asset_type=config.asset_type,
+            requested_start=config.start,
+            requested_end=config.end,
+            load_start=config.start,
+            load_end=config.end,
+            simulation_end=config.end,
+            generation=generation,
+        ).to_dict()
+
+    def _coverage_for_run(
+        self,
+        config: StrategyBacktestConfig,
+        *,
+        load_start: date,
+        load_end: date,
+        simulation_end: date,
+        generation: str | None,
+        panel: pl.DataFrame | None = None,
+        market_data: MarketDataMatrix | None = None,
+    ) -> dict:
+        labels = (
+            market_data.timestamp_labels
+            if market_data is not None
+            else (
+                panel.get_column("date").to_list()
+                if panel is not None and "date" in panel.columns
+                else ()
+            )
+        )
+        symbol_count = (
+            len(market_data.symbols)
+            if market_data is not None
+            else (panel["symbol"].n_unique() if panel is not None and "symbol" in panel.columns else 0)
+        )
+        row_count = (
+            int(market_data.close.size)
+            if market_data is not None
+            else (len(panel) if panel is not None else 0)
+        )
+        storage_path = None
+        repo = getattr(self.engine, "repo", None)
+        data_dir = getattr(getattr(repo, "store", None), "data_dir", None)
+        if data_dir is not None:
+            storage_path = str(data_dir)
+        return coverage_from_labels(
+            labels,
+            asset_type=config.asset_type,
+            requested_start=config.start,
+            requested_end=config.end,
+            load_start=load_start,
+            load_end=load_end,
+            simulation_end=simulation_end,
+            forward_end=load_end if config.mode == "full" else config.end,
+            symbol_count=symbol_count,
+            row_count=row_count,
+            generation=generation,
+            source="enriched_parquet",
+            storage_path=storage_path,
+        ).to_dict()
 
     @staticmethod
     def _matrix_prepare_signature(config: StrategyBacktestConfig) -> tuple:
@@ -1012,13 +1164,26 @@ class StrategyBacktestService:
         t0 = time.perf_counter()
         run_id = uuid.uuid4().hex[:10]
         result_policy = result_policy or BacktestResultPolicy()
+        generation = self._data_generation(config.asset_type)
+        started_at = utc_now()
 
         def _err(msg: str) -> StrategyBacktestResult:
+            validation = rejected_validation(_validation_code(msg), msg)
             return StrategyBacktestResult(
                 run_id=run_id,
                 config=self._config_to_dict(config),
                 error=msg,
                 elapsed_ms=(time.perf_counter() - t0) * 1000,
+                validation=validation.to_dict(),
+                provenance=self._result_provenance(
+                    config,
+                    run_id,
+                    started_at,
+                    coverage=self._empty_coverage(config, generation),
+                    validation=validation,
+                    elapsed_ms=(time.perf_counter() - t0) * 1000,
+                    data_generation=generation,
+                ),
             )
 
         # 获取策略定义
@@ -1098,6 +1263,7 @@ class StrategyBacktestService:
                 result_policy=result_policy,
                 run_id=run_id,
                 t0=t0,
+                generation=generation,
             )
 
         try:
@@ -1146,6 +1312,7 @@ class StrategyBacktestService:
 
         sim_end = load_end if config.mode == "full" else config.end
         panel: pl.DataFrame | None = None
+        coverage_panel: pl.DataFrame | None = None
         formal_range: pl.Series | None = None
         market_data: MarketDataMatrix | None = None
         if prepared is not None:
@@ -1202,6 +1369,7 @@ class StrategyBacktestService:
                     cache_profile=cache_profile,
                     coverage_start=coverage_start,
                     coverage_end=coverage_end,
+                    expected_generation=generation,
                 )
             except (ValueError, OSError) as e:
                 return _err(f"回测矩阵准备失败: {e}")
@@ -1228,13 +1396,25 @@ class StrategyBacktestService:
         else:
             t_load = time.perf_counter()
             try:
-                panel = self.engine.load_panel_for_backtest(
-                    config.symbols,
-                    load_start,
-                    load_end,
-                    feature_plan,
-                    asset_type=config.asset_type,
-                )
+                try:
+                    panel = self.engine.load_panel_for_backtest(
+                        config.symbols,
+                        load_start,
+                        load_end,
+                        feature_plan,
+                        asset_type=config.asset_type,
+                        expected_generation=generation,
+                    )
+                except TypeError as exc:
+                    if "expected_generation" not in str(exc):
+                        raise
+                    panel = self.engine.load_panel_for_backtest(
+                        config.symbols,
+                        load_start,
+                        load_end,
+                        feature_plan,
+                        asset_type=config.asset_type,
+                    )
             except (ValueError, pl.exceptions.PolarsError) as e:
                 return _err(f"回测特征准备失败: {e}")
             timing_ms["load_panel"] = round((time.perf_counter() - t_load) * 1000, 1)
@@ -1358,7 +1538,11 @@ class StrategyBacktestService:
                 "entry_trigger_filtered": 0,
                 "entry_trigger_enabled": False,
             }
-            del market_data, signal_matrix
+            # Keep the immutable source matrix alive until provenance is built.
+            # The sliced simulation arrays are released below, while coverage
+            # still needs the real warmup/formal/forward axis.
+            coverage_market_data = market_data
+            del signal_matrix
 
             t_matrix = time.perf_counter()
             market_matrix = build_market_matrix_from_signals(
@@ -1476,7 +1660,8 @@ class StrategyBacktestService:
                 "entry_trigger_filtered": 0,
                 "entry_trigger_enabled": False,
             }
-            del market_data, signal_matrix
+            coverage_market_data = market_data
+            del signal_matrix
 
             t_matrix = time.perf_counter()
             market_matrix = build_market_matrix_from_signals(
@@ -1567,7 +1752,8 @@ class StrategyBacktestService:
                 minute_exit_trigger=matcher_config.exit_fill == "signal_next_minute",
             )
             timing_ms["matrix_build"] = round((time.perf_counter() - t_matrix) * 1000, 1)
-            del panel, sim_panel, sim_entry_mask, sim_exit_mask
+            coverage_panel = panel
+            del sim_panel, sim_entry_mask, sim_exit_mask
 
         t_sim = time.perf_counter()
 
@@ -1594,11 +1780,31 @@ class StrategyBacktestService:
 
         # 检查是否被取消
         if cancel_event is not None and cancel_event.is_set():
+            validation = rejected_validation("CANCELLED", "回测已取消")
             return StrategyBacktestResult(
                 run_id=run_id,
                 config=self._config_to_dict(config),
                 error="cancelled",
                 elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+                validation=validation.to_dict(),
+                provenance=self._result_provenance(
+                    config,
+                    run_id,
+                    started_at,
+                    coverage=self._coverage_for_run(
+                        config,
+                        load_start=load_start,
+                        load_end=load_end,
+                        simulation_end=sim_end,
+                        generation=generation,
+                        panel=coverage_panel if coverage_panel is not None else panel,
+                        market_data=market_data,
+                    ),
+                    strategy=s,
+                    validation=validation,
+                    elapsed_ms=(time.perf_counter() - t0) * 1000,
+                    data_generation=generation,
+                ),
             )
 
         if result.stats.get("error"):
@@ -1611,6 +1817,7 @@ class StrategyBacktestService:
         result.stats["feature_columns"] = feature_width
         result.stats["full_feature_fallback"] = feature_plan.full_feature_fallback
         result.stats["execution_backend"] = s.execution_backend
+        result.stats["market_rules"] = market_rules_contract(config.asset_type)
         result.stats["selection"] = selection_stats
         result.stats["shared_market_data"] = prepared is not None
         result.stats["matrix_data_cache_hit"] = matrix_data_cache_hit
@@ -1663,6 +1870,40 @@ class StrategyBacktestService:
         selected_stats = result_policy.select_stats(result.stats)
 
         elapsed = (time.perf_counter() - t0) * 1000
+        validation = accepted_validation()
+        coverage = self._coverage_for_run(
+            config,
+            load_start=load_start,
+            load_end=load_end,
+            simulation_end=sim_end,
+            generation=generation,
+            panel=coverage_panel if coverage_panel is not None else panel,
+            market_data=(coverage_market_data if "coverage_market_data" in locals() else market_data),
+        )
+        try:
+            self._assert_data_generation(config.asset_type, generation)
+        except Exception:
+            validation = rejected_validation(
+                "DATA_GENERATION_CHANGED",
+                "回测期间数据发生变化, 已拒绝本次结果",
+            )
+            return StrategyBacktestResult(
+                run_id=run_id,
+                config=self._config_to_dict(config),
+                error=validation.message,
+                elapsed_ms=round(elapsed, 1),
+                validation=validation.to_dict(),
+                provenance=self._result_provenance(
+                    config,
+                    run_id,
+                    started_at,
+                    coverage=coverage,
+                    strategy=s,
+                    validation=validation,
+                    elapsed_ms=elapsed,
+                    data_generation=generation,
+                ),
+            )
 
         return StrategyBacktestResult(
             run_id=run_id,
@@ -1683,6 +1924,18 @@ class StrategyBacktestService:
             ),
             strategy_info=strategy_info,
             elapsed_ms=round(elapsed, 1),
+            validation=validation.to_dict(),
+            provenance=self._result_provenance(
+                config,
+                run_id,
+                started_at,
+                coverage=coverage,
+                strategy=s,
+                validation=validation,
+                elapsed_ms=elapsed,
+                execution_config=dict(vars(matcher_config)),
+                data_generation=generation,
+            ),
         )
 
     # ── 分钟策略回测: 逐日回放入场 + 日K矩阵离场 ──
@@ -1707,13 +1960,39 @@ class StrategyBacktestService:
         result_policy: BacktestResultPolicy,
         run_id: str,
         t0: float,
+        generation: str | None,
     ) -> StrategyBacktestResult:
+        panel: pl.DataFrame | None = None
+        load_start = config.start
+        load_end = config.end
+        sim_end = config.end
+
         def _err(msg: str) -> StrategyBacktestResult:
+            validation = rejected_validation(_validation_code(msg), msg)
+            coverage = self._coverage_for_run(
+                config,
+                load_start=load_start,
+                load_end=load_end,
+                simulation_end=sim_end,
+                generation=generation,
+                panel=panel,
+            )
             return StrategyBacktestResult(
                 run_id=run_id,
                 config=self._config_to_dict(config),
                 error=msg,
                 elapsed_ms=(time.perf_counter() - t0) * 1000,
+                validation=validation.to_dict(),
+                provenance=self._result_provenance(
+                    config,
+                    run_id,
+                    utc_now(),
+                    coverage=coverage,
+                    strategy=s,
+                    validation=validation,
+                    elapsed_ms=(time.perf_counter() - t0) * 1000,
+                    data_generation=generation,
+                ),
             )
 
         if config.asset_type != "stock":
@@ -1748,12 +2027,14 @@ class StrategyBacktestService:
                 load_end,
                 feature_plan,
                 asset_type="stock",
+                expected_generation=generation,
             )
         except (ValueError, OSError, pl.exceptions.PolarsError) as e:
             return _err(f"回测特征准备失败: {e}")
         timing_ms["load_panel"] = round((time.perf_counter() - t_load) * 1000, 1)
         if panel.is_empty():
             return _err("无日线数据, 请检查日期范围或先运行盘后管道")
+        coverage_panel = panel
 
         replayer = MinuteSignalReplayer(self.engine, self.strategy_engine)
         replay = replayer.replay(
@@ -1769,11 +2050,31 @@ class StrategyBacktestService:
         )
         timing_ms["minute_replay"] = replay.elapsed_ms
         if cancel_event is not None and cancel_event.is_set():
+            validation = rejected_validation("CANCELLED", "回测已取消")
+            coverage = self._coverage_for_run(
+                config,
+                load_start=load_start,
+                load_end=load_end,
+                simulation_end=sim_end,
+                generation=generation,
+                panel=panel,
+            )
             return StrategyBacktestResult(
                 run_id=run_id,
                 config=self._config_to_dict(config),
                 error="cancelled",
                 elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+                validation=validation.to_dict(),
+                provenance=self._result_provenance(
+                    config,
+                    run_id,
+                    utc_now(),
+                    coverage=coverage,
+                    strategy=s,
+                    validation=validation,
+                    elapsed_ms=(time.perf_counter() - t0) * 1000,
+                    data_generation=generation,
+                ),
             )
         if not replay.hits:
             skipped_hint = (
@@ -1907,6 +2208,7 @@ class StrategyBacktestService:
         result.stats["panel_columns"] = 0
         result.stats["feature_columns"] = 0
         result.stats["execution_backend"] = s.execution_backend
+        result.stats["market_rules"] = market_rules_contract(config.asset_type)
         result.stats["selection"] = {
             "strategy_matches": replay.strategy_matches,
             "entry_candidates": raw_candidates,
@@ -1962,6 +2264,39 @@ class StrategyBacktestService:
 
         selected_stats = result_policy.select_stats(result.stats)
         elapsed = (time.perf_counter() - t0) * 1000
+        validation = accepted_validation()
+        coverage = self._coverage_for_run(
+            config,
+            load_start=load_start,
+            load_end=load_end,
+            simulation_end=sim_end,
+            generation=generation,
+            panel=coverage_panel,
+        )
+        try:
+            self._assert_data_generation(config.asset_type, generation)
+        except Exception:
+            validation = rejected_validation(
+                "DATA_GENERATION_CHANGED",
+                "回测期间数据发生变化, 已拒绝本次结果",
+            )
+            return StrategyBacktestResult(
+                run_id=run_id,
+                config=self._config_to_dict(config),
+                error=validation.message,
+                elapsed_ms=round(elapsed, 1),
+                validation=validation.to_dict(),
+                provenance=self._result_provenance(
+                    config,
+                    run_id,
+                    utc_now(),
+                    coverage=coverage,
+                    strategy=s,
+                    validation=validation,
+                    elapsed_ms=elapsed,
+                    data_generation=generation,
+                ),
+            )
         return StrategyBacktestResult(
             run_id=run_id,
             config=self._config_to_dict(config),
@@ -1977,6 +2312,18 @@ class StrategyBacktestService:
             ),
             strategy_info=strategy_info,
             elapsed_ms=round(elapsed, 1),
+            validation=validation.to_dict(),
+            provenance=self._result_provenance(
+                config,
+                run_id,
+                utc_now(),
+                coverage=coverage,
+                strategy=s,
+                validation=validation,
+                elapsed_ms=elapsed,
+                execution_config=dict(vars(matcher_config)),
+                data_generation=generation,
+            ),
         )
 
     # ── 全量模拟 (选股能力统计, 不建组合不算净值) ──

@@ -162,6 +162,9 @@ def _attach_worker_metrics(
 ) -> None:
     if kind == "backtest":
         result.setdefault("stats", {})["worker"] = metrics
+        provenance = result.get("provenance")
+        if isinstance(provenance, dict):
+            provenance["worker"] = metrics
     else:
         result["worker"] = metrics
 

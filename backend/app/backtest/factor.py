@@ -17,16 +17,23 @@ from typing import Any, Literal
 import numpy as np
 import polars as pl
 
+from app.backtest.contracts import (
+    BacktestProvenance,
+    BacktestValidation,
+    accepted_validation,
+    coverage_from_labels,
+    rejected_validation,
+)
 from app.backtest.engine import BacktestEngine
 from app.backtest.fundamentals import (
     FUNDAMENTAL_FACTOR_NAMES,
     attach_fundamental_factors,
     load_fundamental_snapshot,
 )
+from app.indicators.spec import INDICATOR_SPEC_VERSION
+from app.price_limits import MARKET_RULES_VERSION, market_rules_contract
 from app.strategy.scoring import (
     VIRTUAL_SCORING_DEPENDENCIES as DERIVED_FACTOR_DEPENDENCIES,
-)
-from app.strategy.scoring import (
     materialize_scoring_columns,
 )
 
@@ -111,6 +118,7 @@ FACTOR_COLUMNS: list[dict] = [
 FACTOR_WARMUP_DAYS = 120
 FACTOR_METHODOLOGY_VERSION = "factor_v2"
 _DAILY_FORWARD_HORIZONS = (1, 3, 5)
+_FACTOR_FORWARD_TAIL_DAYS = 14
 
 
 @dataclass
@@ -169,6 +177,9 @@ class FactorResult:
     yearly_ic: list[dict] = field(default_factory=list)
     ic_decay: list[dict] = field(default_factory=list)
     regime_stats: list[dict] = field(default_factory=list)
+    data_coverage: dict = field(default_factory=dict)
+    validation: dict = field(default_factory=lambda: accepted_validation().to_dict())
+    provenance: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -208,6 +219,9 @@ class FactorBatchItem:
     yearly_ic: list[dict] = field(default_factory=list)
     ic_decay: list[dict] = field(default_factory=list)
     regime_stats: list[dict] = field(default_factory=list)
+    data_coverage: dict = field(default_factory=dict)
+    validation: dict = field(default_factory=lambda: accepted_validation().to_dict())
+    provenance: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -219,6 +233,9 @@ class FactorBatchResult:
     n_symbols: int = 0
     n_dates: int = 0
     error: str | None = None
+    data_coverage: dict = field(default_factory=dict)
+    validation: dict = field(default_factory=lambda: accepted_validation().to_dict())
+    provenance: dict = field(default_factory=dict)
 
 
 class FactorBacktestService:
@@ -234,33 +251,40 @@ class FactorBacktestService:
         t0 = time.perf_counter()
         run_id = uuid.uuid4().hex[:10]
         generation = self._data_generation(config.asset_type)
+        load_end = self._factor_load_end(config)
         panel = self._load_factor_panel(
             config,
             [config.factor_name],
+            load_end=load_end,
             expected_generation=generation,
         )
         if panel.is_empty():
-            return self._error_result(config, run_id, t0, "无数据, 请检查日期范围或先运行盘后管道")
+            return self._error_result(
+                config, run_id, t0, "无数据, 请检查日期范围或先运行盘后管道",
+                code="NO_DATA", generation=generation,
+            )
 
         if config.factor_name in FUNDAMENTAL_FACTOR_NAMES and self._fundamentals_missing():
             return self._error_result(
                 config, run_id, t0,
                 "本地没有财务数据: 请先在数据页同步财务数据后再使用财务因子",
+                code="NO_DATA", generation=generation,
             )
 
-        trading_dates = self._global_trading_dates(config)
+        trading_dates = self._global_trading_dates(config, axis_end=load_end)
         self._assert_data_generation(config.asset_type, generation)
         panel = self._attach_shared_next_return(
             panel,
             config,
             trading_dates=trading_dates,
+            axis_end=load_end,
         )
         evaluate_kwargs = (
             {"regime_by_date": regime_by_date}
             if regime_by_date is not None
             else {}
         )
-        return self._evaluate_panel(
+        result = self._evaluate_panel(
             panel,
             config,
             run_id,
@@ -268,6 +292,18 @@ class FactorBacktestService:
             market_trading_dates=trading_dates,
             **evaluate_kwargs,
         )
+        try:
+            self._assert_data_generation(config.asset_type, generation)
+        except Exception:
+            return self._error_result(
+                config,
+                run_id,
+                t0,
+                "回测期间数据发生变化, 已拒绝本次结果",
+                code="DATA_GENERATION_CHANGED",
+                generation=generation,
+            )
+        return result
 
     def run_batch(
         self,
@@ -281,33 +317,46 @@ class FactorBacktestService:
         factor_names = list(dict.fromkeys(config.factor_names))
         result_config = self._batch_config_to_dict(config, factor_names)
         if not factor_names:
+            validation = rejected_validation("NO_FACTOR", "至少选择一个因子", field="factor_names")
             return FactorBatchResult(
                 run_id=run_id,
                 config=result_config,
                 error="至少选择一个因子",
+                validation=validation.to_dict(),
+                provenance=self._batch_provenance(
+                    config, run_id, result_config, {}, generation=None, validation=validation,
+                ),
             )
 
         generation = self._data_generation(config.asset_type)
+        load_end = self._factor_load_end(config)
         panel = self._load_factor_panel(
             config,
             factor_names,
+            load_end=load_end,
             expected_generation=generation,
         )
         if panel.is_empty():
+            validation = rejected_validation("NO_DATA", "无数据, 请检查日期范围或先运行盘后管道")
             return FactorBatchResult(
                 run_id=run_id,
                 config=result_config,
                 error="无数据, 请检查日期范围或先运行盘后管道",
                 elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+                validation=validation.to_dict(),
+                provenance=self._batch_provenance(
+                    config, run_id, result_config, {}, generation=generation, validation=validation,
+                ),
             )
 
         # P1: 预计算共享下期收益 (仅依赖 close/date/symbol), 避免每个因子重复 shift/调仓日 JOIN。
-        trading_dates = self._global_trading_dates(config)
+        trading_dates = self._global_trading_dates(config, axis_end=load_end)
         self._assert_data_generation(config.asset_type, generation)
         panel = self._attach_shared_next_return(
             panel,
             config,
             trading_dates=trading_dates,
+            axis_end=load_end,
         )
 
         metadata = {item["id"]: item for item in FACTOR_COLUMNS}
@@ -340,6 +389,7 @@ class FactorBacktestService:
                     group=str(meta.get("group", "")),
                     elapsed_ms=round((time.perf_counter() - item_t0) * 1000, 1),
                     error="本地没有财务数据: 请先在数据页同步财务数据后再使用财务因子",
+                    validation=rejected_validation("NO_DATA", "本地没有财务数据").to_dict(),
                 ))
                 continue
             try:
@@ -377,6 +427,9 @@ class FactorBacktestService:
                     n_dates=result.n_dates,
                     elapsed_ms=result.elapsed_ms,
                     error=result.error,
+                    data_coverage=result.data_coverage,
+                    validation=result.validation,
+                    provenance=result.provenance,
                 ))
             except Exception as exc:  # 单因子失败不能中止整个筛选批次
                 logger.exception("factor batch item failed: %s", factor_name)
@@ -386,10 +439,47 @@ class FactorBacktestService:
                     group=str(meta.get("group", "")),
                     elapsed_ms=round((time.perf_counter() - item_t0) * 1000, 1),
                     error=str(exc),
+                    validation=rejected_validation("BACKTEST_REJECTED", str(exc)).to_dict(),
                 ))
 
         n_symbols = max((item.n_symbols for item in items), default=0)
         n_dates = max((item.n_dates for item in items), default=0)
+        try:
+            self._assert_data_generation(config.asset_type, generation)
+        except Exception:
+            validation = rejected_validation(
+                "DATA_GENERATION_CHANGED",
+                "回测期间数据发生变化, 已拒绝本次结果",
+            )
+            return FactorBatchResult(
+                run_id=run_id,
+                config=result_config,
+                results=items,
+                elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+                n_symbols=n_symbols,
+                n_dates=n_dates,
+                error=validation.message,
+                validation=validation.to_dict(),
+                provenance=self._batch_provenance(
+                    config,
+                    run_id,
+                    result_config,
+                    items[0].data_coverage if items else {},
+                    generation=generation,
+                    validation=validation,
+                ),
+            )
+        failed_items = [item for item in items if item.error]
+        batch_validation = (
+            BacktestValidation(
+                status="partial",
+                code="PARTIAL_FAILURE",
+                message=f"{len(failed_items)} 个因子评估失败",
+                severity="warning",
+            )
+            if failed_items
+            else accepted_validation()
+        )
         return FactorBatchResult(
             run_id=run_id,
             config=result_config,
@@ -397,11 +487,19 @@ class FactorBacktestService:
             elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
             n_symbols=n_symbols,
             n_dates=n_dates,
+            data_coverage=(items[0].data_coverage if items else {}),
+            validation=batch_validation.to_dict(),
+            provenance=self._batch_provenance(
+                config, run_id, result_config,
+                items[0].data_coverage if items else {},
+                generation=generation, validation=batch_validation,
+            ),
         )
 
     def _data_generation(self, asset_type: str) -> str | None:
         loader = getattr(self.engine, "data_generation", None)
-        return loader(asset_type) if callable(loader) else None
+        value = loader(asset_type) if callable(loader) else None
+        return value if value is None or isinstance(value, str) else None
 
     def _fundamentals_missing(self) -> bool:
         return load_fundamental_snapshot(self._fundamentals_data_dir()) is None
@@ -409,6 +507,23 @@ class FactorBacktestService:
     def _fundamentals_data_dir(self) -> Path | None:
         repo = getattr(self.engine, "repo", None)
         return getattr(getattr(repo, "store", None), "data_dir", None)
+
+    @staticmethod
+    def _factor_load_start(config: FactorConfig | FactorBatchConfig) -> date:
+        names = (
+            list(config.factor_names)
+            if isinstance(config, FactorBatchConfig)
+            else [config.factor_name]
+        )
+        if all(name == "turnover_rate" for name in names):
+            return config.start
+        return config.start - timedelta(days=FACTOR_WARMUP_DAYS)
+
+    @staticmethod
+    def _factor_load_end(config: FactorConfig | FactorBatchConfig) -> date:
+        # Load beyond the formal range so the last five forward observations are
+        # either proven available or explicitly rejected.
+        return config.end + timedelta(days=_FACTOR_FORWARD_TAIL_DAYS)
 
     def _assert_data_generation(
         self,
@@ -424,6 +539,7 @@ class FactorBacktestService:
         config: FactorConfig | FactorBatchConfig,
         factor_names: list[str],
         *,
+        load_end: date | None = None,
         expected_generation: str | None = None,
     ) -> pl.DataFrame:
         panel_columns = [
@@ -435,9 +551,10 @@ class FactorBacktestService:
             for name in factor_names
         ):
             panel_columns.append("consecutive_limit_ups")
-        load_start = config.start
-        if any(name != "turnover_rate" for name in factor_names):
-            load_start = config.start - timedelta(days=FACTOR_WARMUP_DAYS)
+        load_start = self._factor_load_start(
+            config
+        )
+        load_end = load_end or self._factor_load_end(config)
 
         load_kwargs = {
             "columns": panel_columns,
@@ -448,7 +565,7 @@ class FactorBacktestService:
         panel = self.engine.load_panel(
             config.symbols,
             load_start,
-            config.end,
+            load_end,
             **load_kwargs,
         )
         if panel.is_empty():
@@ -470,6 +587,8 @@ class FactorBacktestService:
     def _global_trading_dates(
         self,
         config: FactorConfig | FactorBatchConfig,
+        *,
+        axis_end: date | None = None,
     ) -> list[date] | None:
         """Read the market date axis from enriched partitions, independent of symbols."""
         repo = getattr(self.engine, "repo", None)
@@ -480,12 +599,13 @@ class FactorBacktestService:
 
         values: list[date] = []
         root = data_dir / enriched_dirname(config.asset_type)
+        axis_end = axis_end or config.end
         for partition in root.glob("date=*"):
             try:
                 value = date.fromisoformat(partition.name.removeprefix("date="))
             except ValueError:
                 continue
-            if value <= config.end and (partition / "part.parquet").is_file():
+            if value <= axis_end and (partition / "part.parquet").is_file():
                 values.append(value)
         ordered = sorted(set(values))
         formal = [value for value in ordered if value >= config.start]
@@ -503,6 +623,7 @@ class FactorBacktestService:
         config: FactorConfig | FactorBatchConfig,
         *,
         trading_dates: list[date] | None = None,
+        axis_end: date | None = None,
     ) -> pl.DataFrame:
         """Prepare returns once on the complete price axis before factor filtering."""
         forward_columns = [f"_forward_return_{horizon}d" for horizon in _DAILY_FORWARD_HORIZONS]
@@ -514,7 +635,10 @@ class FactorBacktestService:
             panel = panel.drop(existing_columns)
 
         base = (
-            panel.filter((pl.col("date") >= config.start) & (pl.col("date") <= config.end))
+            panel.filter(
+                (pl.col("date") >= config.start)
+                & (pl.col("date") <= (axis_end or config.end))
+            )
             .filter(pl.col("close").is_not_null() & (pl.col("close") > 0))
             .select(["symbol", "date", "close"])
             .unique(subset=["symbol", "date"], keep="last")
@@ -531,7 +655,7 @@ class FactorBacktestService:
             for value in (
                 trading_dates if trading_dates is not None else base["date"].unique().to_list()
             )
-            if config.start <= value <= config.end
+                if config.start <= value <= (axis_end or config.end)
         )
         date_dtype = base.schema["date"]
         for horizon, return_column in zip(
@@ -625,6 +749,44 @@ class FactorBacktestService:
         if panel.is_empty():
             return _err("过滤后无有效数据")
 
+        available_dates = sorted(
+            value for value in source_panel.get_column("date").unique().to_list()
+            if value >= config.start
+        )
+        ordered_market_dates = sorted(
+            value for value in (market_trading_dates or available_dates)
+            if value >= config.start
+        )
+        future_dates = [
+            value for value in ordered_market_dates
+            if value > config.end
+        ]
+        required_forward_end = (
+            future_dates[_DAILY_FORWARD_HORIZONS[-1] - 1]
+            if len(future_dates) >= _DAILY_FORWARD_HORIZONS[-1]
+            else config.end + timedelta(days=_FACTOR_FORWARD_TAIL_DAYS)
+        )
+        actual_forward_end = max(available_dates, default=None)
+        has_snapshot_source = self._data_generation(config.asset_type) is not None
+        if has_snapshot_source and (actual_forward_end is None or actual_forward_end < config.end):
+            return self._error_result(
+                config, run_id, t0,
+                "正式区间末端缺少数据, 无法证明前瞻收益",
+                code="NO_FORMAL_DATA", generation=self._data_generation(config.asset_type),
+                coverage=self._factor_coverage(
+                    config, source_panel, generation=self._data_generation(config.asset_type),
+                ),
+            )
+        if has_snapshot_source and actual_forward_end < required_forward_end:
+            return self._error_result(
+                config, run_id, t0,
+                f"前瞻数据不足, 需要覆盖至 {required_forward_end.isoformat()}",
+                code="INSUFFICIENT_FORWARD_COVERAGE", generation=self._data_generation(config.asset_type),
+                coverage=self._factor_coverage(
+                    config, source_panel, generation=self._data_generation(config.asset_type),
+                ),
+            )
+
         panel = panel.sort(["symbol", "date"])
         coverage = panel.height / total_price_rows if total_price_rows else None
         n_symbols = panel["symbol"].n_unique()
@@ -686,6 +848,21 @@ class FactorBacktestService:
             elapsed_ms=round(elapsed, 1),
             n_symbols=n_symbols,
             n_dates=n_dates,
+            data_coverage=self._factor_coverage(
+                config,
+                source_panel,
+                generation=self._data_generation(config.asset_type),
+            ),
+            validation=accepted_validation().to_dict(),
+            provenance=self._factor_provenance(
+                config,
+                run_id,
+                self._factor_coverage(
+                    config, source_panel, generation=self._data_generation(config.asset_type),
+                ),
+                accepted_validation(),
+                elapsed,
+            ),
         )
 
     @staticmethod
@@ -724,13 +901,120 @@ class FactorBacktestService:
         run_id: str,
         started_at: float,
         message: str,
+        *,
+        code: str = "BACKTEST_REJECTED",
+        generation: str | None = None,
+        coverage: dict | None = None,
     ) -> FactorResult:
+        validation = rejected_validation(code, message)
+        coverage = coverage or FactorBacktestService._empty_factor_coverage(config, generation)
+        elapsed = round((time.perf_counter() - started_at) * 1000, 1)
         return FactorResult(
             run_id=run_id,
             config=FactorBacktestService._config_to_dict(config),
             error=message,
-            elapsed_ms=round((time.perf_counter() - started_at) * 1000, 1),
+            elapsed_ms=elapsed,
+            data_coverage=coverage,
+            validation=validation.to_dict(),
+            provenance=FactorBacktestService._factor_provenance(
+                config, run_id, coverage, validation, elapsed,
+            ),
         )
+
+    @staticmethod
+    def _empty_factor_coverage(
+        config: FactorConfig | FactorBatchConfig,
+        generation: str | None,
+    ) -> dict:
+        return coverage_from_labels(
+            (),
+            asset_type=config.asset_type,
+            requested_start=config.start,
+            requested_end=config.end,
+            load_start=FactorBacktestService._factor_load_start(config),
+            load_end=FactorBacktestService._factor_load_end(config),
+            simulation_end=config.end,
+            warmup_start=FactorBacktestService._factor_load_start(config),
+            forward_end=FactorBacktestService._factor_load_end(config),
+            generation=generation,
+            source="enriched_parquet",
+        ).to_dict()
+
+    def _factor_coverage(
+        self,
+        config: FactorConfig | FactorBatchConfig,
+        panel: pl.DataFrame,
+        *,
+        generation: str | None,
+    ) -> dict:
+        labels = panel.get_column("date").to_list() if "date" in panel.columns else ()
+        return coverage_from_labels(
+            labels,
+            asset_type=config.asset_type,
+            requested_start=config.start,
+            requested_end=config.end,
+            load_start=FactorBacktestService._factor_load_start(config),
+            load_end=FactorBacktestService._factor_load_end(config),
+            simulation_end=config.end,
+            warmup_start=FactorBacktestService._factor_load_start(config),
+            forward_end=FactorBacktestService._factor_load_end(config),
+            symbol_count=panel["symbol"].n_unique() if "symbol" in panel.columns else 0,
+            row_count=len(panel),
+            generation=generation,
+            source="enriched_parquet",
+            storage_path=(
+                str(self._fundamentals_data_dir())
+                if self._fundamentals_data_dir() is not None
+                else None
+            ),
+        ).to_dict()
+
+    @staticmethod
+    def _factor_provenance(
+        config: FactorConfig,
+        run_id: str,
+        coverage: dict,
+        validation,
+        elapsed: float,
+    ) -> dict:
+        return BacktestProvenance(
+            run_id=run_id,
+            engine="factor_backtest",
+            asset_type=config.asset_type,
+            data_generation=coverage.get("generation"),
+            data_coverage=coverage,
+            data_source=coverage.get("source"),
+            storage_path=coverage.get("storage_path"),
+            indicator_version=INDICATOR_SPEC_VERSION,
+            parameters=FactorBacktestService._config_to_dict(config),
+            market_rules_version=MARKET_RULES_VERSION,
+            execution_config=market_rules_contract(config.asset_type),
+            validation=validation.to_dict(),
+            elapsed_ms=elapsed,
+        ).to_dict()
+
+    @staticmethod
+    def _batch_provenance(
+        config: FactorBatchConfig,
+        run_id: str,
+        result_config: dict,
+        coverage: dict,
+        *,
+        generation: str | None,
+        validation,
+    ) -> dict:
+        return BacktestProvenance(
+            run_id=run_id,
+            engine="factor_backtest_batch",
+            asset_type=config.asset_type,
+            data_generation=generation,
+            data_coverage=coverage,
+            data_source=coverage.get("source"),
+            parameters=result_config,
+            market_rules_version=MARKET_RULES_VERSION,
+            execution_config=market_rules_contract(config.asset_type),
+            validation=validation.to_dict(),
+        ).to_dict()
 
     # ── IC 计算 ──
 

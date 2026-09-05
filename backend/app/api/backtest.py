@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.backtest.contracts import rejected_validation
 from app.config import settings
 from app.services.backtest import (
     BacktestConfig,
@@ -32,6 +33,28 @@ BACKTEST_SERVER_GUARD_MESSAGE = (
     "当前服务器内存约 1.8GB，回测区间最多支持 6 个月；"
     "更长周期容易触发 OOM，建议在 8GB 以上内存环境或本机运行。"
 )
+
+
+def _validation_payload(
+    code: str,
+    message: str,
+    *,
+    field: str | None = None,
+    requested=None,
+    available=None,
+    retryable: bool = False,
+) -> dict:
+    return {
+        "message": message,
+        "validation": rejected_validation(
+            code,
+            message,
+            field=field,
+            requested=requested,
+            available=available,
+            retryable=retryable,
+        ).to_dict(),
+    }
 
 
 def _get_engine(request: Request):
@@ -59,7 +82,19 @@ def _guard_server_backtest_range(start: date, end: date):
         return
     days = (end - start).days + 1
     if days > BACKTEST_MAX_SERVER_DAYS:
-        raise HTTPException(status_code=400, detail=BACKTEST_SERVER_GUARD_MESSAGE)
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": BACKTEST_SERVER_GUARD_MESSAGE,
+                "validation": rejected_validation(
+                    "RANGE_TOO_LARGE",
+                    BACKTEST_SERVER_GUARD_MESSAGE,
+                    field="start/end",
+                    requested={"start": start.isoformat(), "end": end.isoformat()},
+                    retryable=True,
+                ).to_dict(),
+            },
+        )
 
 
 # ================================================================
@@ -360,16 +395,36 @@ def _guard_minute_strategy_backtest(
     if s is None or s.execution_backend != "minute_filter":
         return
     if asset_type != "stock":
-        raise HTTPException(400, detail="分钟策略回测当前仅支持 A 股 (stock)")
+        message = "分钟策略回测当前仅支持 A 股 (stock)"
+        raise HTTPException(
+            400,
+            detail={
+                "message": message,
+                "validation": rejected_validation(
+                    "MINUTE_COVERAGE_MISSING",
+                    message,
+                    field="asset_type",
+                    requested=asset_type,
+                ).to_dict(),
+            },
+        )
     earliest = request.app.state.repo.earliest_minute_date()
     if earliest is None or start < earliest:
         have = f"最早到 {earliest}, " if earliest else ""
+        message = f"本地分钟K{have}无法覆盖回测起始日 {start}。请先扩展分钟K历史或缩小回测区间"
         raise HTTPException(
             400,
-            detail=(
-                f"本地分钟K{have}无法覆盖回测起始日 {start}。"
-                "请先用「扩展分钟K历史」拉取更多数据, 或缩小回测区间"
-            ),
+            detail={
+                "message": message,
+                "validation": rejected_validation(
+                    "MINUTE_COVERAGE_MISSING",
+                    message,
+                    field="start",
+                    requested=start.isoformat(),
+                    available=earliest.isoformat() if earliest else None,
+                    retryable=True,
+                ).to_dict(),
+            },
         )
 
 
@@ -569,7 +624,19 @@ async def strategy_stream(
     async def event_generator():
         # 范围保护: 直接报错
         if guard_violated:
-            yield f"event: error\ndata: {json.dumps({'message': BACKTEST_SERVER_GUARD_MESSAGE}, ensure_ascii=False)}\n\n"
+            yield (
+                "event: error\ndata: "
+                + json.dumps(
+                    _validation_payload(
+                        "RANGE_TOO_LARGE",
+                        BACKTEST_SERVER_GUARD_MESSAGE,
+                        field="start/end",
+                        retryable=True,
+                    ),
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
             return
 
         # 分钟K精确回测: Pro+ 门控 + 数据范围检查
@@ -577,7 +644,20 @@ async def strategy_stream(
             capset = request.app.state.capabilities
             from app.tickflow.capabilities import Cap
             if not capset.has(Cap.KLINE_MINUTE_BATCH):
-                yield f"event: error\ndata: {json.dumps({'message': '分钟K精确回测需要 Pro+ 权限 (kline.minute.batch)'}, ensure_ascii=False)}\n\n"
+                message = "分钟K精确回测需要 Pro+ 权限 (kline.minute.batch)"
+                yield (
+                    "event: error\ndata: "
+                    + json.dumps(
+                        _validation_payload(
+                            "MINUTE_COVERAGE_MISSING",
+                            message,
+                            field="capability",
+                            retryable=False,
+                        ),
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                )
                 return
             # 检查本地分钟K历史是否覆盖回测区间
             repo = request.app.state.repo
@@ -585,7 +665,21 @@ async def strategy_stream(
             if earliest_minute is not None and start_date < earliest_minute:
                 msg = (f"本地分钟K历史最早到 {earliest_minute}, 无法覆盖回测起始日 {start_date}。"
                        f"请先用「扩展分钟K历史」功能拉取更多数据, 或缩小回测区间。")
-                yield f"event: error\ndata: {json.dumps({'message': msg}, ensure_ascii=False)}\n\n"
+                yield (
+                    "event: error\ndata: "
+                    + json.dumps(
+                        _validation_payload(
+                            "MINUTE_COVERAGE_MISSING",
+                            msg,
+                            field="start",
+                            requested=start_date.isoformat(),
+                            available=earliest_minute.isoformat(),
+                            retryable=True,
+                        ),
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                )
                 return
 
         # 如果是新任务, 启动回测线程

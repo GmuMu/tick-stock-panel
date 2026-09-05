@@ -14,8 +14,15 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
+from app.backtest.contracts import (
+    BacktestProvenance,
+    accepted_validation,
+    coverage_from_labels,
+    rejected_validation,
+)
 from app.config import settings
 from app.parquet import scan_enriched_parquet
+from app.price_limits import MARKET_RULES_VERSION, market_rules_contract
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -103,6 +110,10 @@ class BacktestResult:
     equity_curve: list[dict]      # [{date, value}]
     trades: list[dict]            # [{symbol, entry_date, exit_date, pnl_pct, ...}]
     per_symbol_stats: list[dict]  # 每只股票的统计
+    data_coverage: dict = field(default_factory=dict)
+    validation: dict = field(default_factory=lambda: accepted_validation().to_dict())
+    provenance: dict = field(default_factory=dict)
+    error: str | None = None
 
 
 # enriched 表里的信号列名映射
@@ -150,6 +161,10 @@ def _build_max_hold_exits(entries: pd.DataFrame, max_hold_days: int) -> pd.DataF
 class BacktestService:
     def __init__(self, repo: KlineRepository) -> None:
         self.repo = repo
+        self._last_loaded_labels: list[date] = []
+        self._last_loaded_symbols: list[str] = []
+        self._last_load_start: date | None = None
+        self._last_load_end: date | None = None
 
     def _load_panel(
         self,
@@ -157,12 +172,18 @@ class BacktestService:
         start: date,
         end: date,
         asset_type: str = "stock",
+        *,
+        expected_generation: str | None = None,
     ) -> pd.DataFrame:
         """加载 [date × symbol] 价格面板 — Polars scan_parquet + 即时计算指标。
 
         **全项目唯一从 Polars 转 pandas 的边界**(§7.4 / ADR-19)。
         asset_type='etf' 时读 ETF enriched。
         """
+        self._last_loaded_labels = []
+        self._last_loaded_symbols = []
+        self._last_load_start = start - timedelta(days=_WARMUP_CALENDAR_DAYS)
+        self._last_load_end = end
         try:
             from app.tickflow.repository import enriched_dirname
             enriched_glob = str(self.repo.store.data_dir / enriched_dirname(asset_type) / "**" / "*.parquet")
@@ -172,12 +193,15 @@ class BacktestService:
             # 此处指标最长回看约 120 交易日, 取保守日历日窗口; 数据不足时
             # 自然退化 (有多少算多少)。计算完成后裁回 [start,end]。
             warmup_start = start - timedelta(days=_WARMUP_CALENDAR_DAYS)
+            load_end = end
+            if expected_generation is None:
+                expected_generation = self._data_generation(asset_type)
             df = (
                 scan_enriched_parquet(enriched_glob)
                 .filter(
                     (pl.col("symbol").is_in(symbols))
                     & (pl.col("date") >= warmup_start)
-                    & (pl.col("date") <= end)
+                    & (pl.col("date") <= load_end)
                 )
                 .sort(["date", "symbol"])
                 .collect()
@@ -188,6 +212,21 @@ class BacktestService:
 
         if df.is_empty():
             return pd.DataFrame()
+        self._last_loaded_labels = sorted(
+            {
+                value
+                for value in df.get_column("date").to_list()
+                if value is not None
+            }
+        )
+        self._last_loaded_symbols = sorted(
+            {
+                str(value)
+                for value in df.get_column("symbol").to_list()
+                if value is not None
+            }
+        )
+        self._assert_data_generation(asset_type, expected_generation)
 
         # 即时计算指标 + 信号
         from app.indicators.pipeline import compute_all
@@ -243,8 +282,39 @@ class BacktestService:
     def run(self, config: BacktestConfig) -> BacktestResult:
         vbt = _get_vbt()
         run_id = uuid.uuid4().hex[:10]
+        started = pd.Timestamp.utcnow().isoformat()
+        generation = self._data_generation(config.asset_type)
 
-        panel = self._load_panel(config.symbols, config.start, config.end, config.asset_type)
+        try:
+            panel = self._load_panel(
+                config.symbols,
+                config.start,
+                config.end,
+                config.asset_type,
+                expected_generation=generation,
+            )
+        except RuntimeError as exc:
+            validation = rejected_validation(
+                "DATA_GENERATION_CHANGED",
+                "回测期间数据发生变化, 已拒绝本次结果",
+            )
+            return BacktestResult(
+                run_id=run_id,
+                config=_config_to_dict(config),
+                stats={"error": str(exc)},
+                equity_curve=[],
+                trades=[],
+                per_symbol_stats=[],
+                data_coverage=self._coverage(config, pd.DataFrame(), generation),
+                validation=validation.to_dict(),
+                provenance=self._provenance(
+                    run_id, config,
+                    self._coverage(config, pd.DataFrame(), generation),
+                    validation,
+                    started,
+                ),
+            )
+        coverage = self._coverage(config, panel, generation)
         if panel.empty:
             return BacktestResult(
                 run_id=run_id,
@@ -253,6 +323,15 @@ class BacktestService:
                 equity_curve=[],
                 trades=[],
                 per_symbol_stats=[],
+                data_coverage=coverage,
+                validation=rejected_validation(
+                    "NO_DATA", "no data", field="date",
+                ).to_dict(),
+                provenance=self._provenance(
+                    run_id, config, coverage,
+                    rejected_validation("NO_DATA", "no data"),
+                    started,
+                ),
             )
 
         # 价格面板
@@ -273,6 +352,7 @@ class BacktestService:
             exits = pd.DataFrame(False, index=close.index, columns=close.columns)
 
         if not entries.any().any():
+            validation = rejected_validation("NO_SIGNALS", "no buy signals", field="entries")
             return BacktestResult(
                 run_id=run_id,
                 config=_config_to_dict(config),
@@ -280,6 +360,11 @@ class BacktestService:
                 equity_curve=[],
                 trades=[],
                 per_symbol_stats=[],
+                data_coverage=coverage,
+                validation=validation.to_dict(),
+                provenance=self._provenance(
+                    run_id, config, coverage, validation, started,
+                ),
             )
 
         # T+1 适配:vectorbt 默认信号当根 K 撮合
@@ -314,6 +399,7 @@ class BacktestService:
             pf = vbt.Portfolio.from_signals(**pf_kwargs)
         except Exception as e:  # noqa: BLE001
             logger.exception("vectorbt backtest failed")
+            validation = rejected_validation("BACKTEST_REJECTED", str(e))
             return BacktestResult(
                 run_id=run_id,
                 config=_config_to_dict(config),
@@ -321,6 +407,11 @@ class BacktestService:
                 equity_curve=[],
                 trades=[],
                 per_symbol_stats=[],
+                data_coverage=coverage,
+                validation=validation.to_dict(),
+                provenance=self._provenance(
+                    run_id, config, coverage, validation, started,
+                ),
             )
 
         # 提取结果
@@ -372,18 +463,111 @@ class BacktestService:
         except Exception:  # noqa: BLE001
             pass
 
+        result_stats = {k: _json_safe(v) for k, v in stats_dict.items()}
+        result_stats["market_rules"] = market_rules_contract(config.asset_type)
         result = BacktestResult(
             run_id=run_id,
             config=_config_to_dict(config),
-            stats={k: _json_safe(v) for k, v in stats_dict.items()},
+            stats=result_stats,
             equity_curve=equity_curve,
             trades=trades,
             per_symbol_stats=per_symbol,
+            data_coverage=coverage,
+            validation=accepted_validation().to_dict(),
+            provenance=self._provenance(
+                run_id, config, coverage, accepted_validation(), started,
+            ),
         )
+        try:
+            self._assert_data_generation(config.asset_type, generation)
+        except RuntimeError as exc:
+            validation = rejected_validation(
+                "DATA_GENERATION_CHANGED",
+                "回测期间数据发生变化, 已拒绝本次结果",
+            )
+            result.stats["error"] = str(exc)
+            result.error = str(exc)
+            result.validation = validation.to_dict()
+            result.provenance = self._provenance(
+                run_id, config, coverage, validation, started,
+            )
+            return result
 
         # 落盘
         self._persist(result)
         return result
+
+    def _data_generation(self, asset_type: str) -> str | None:
+        loader = getattr(self.repo, "get_matrix_data_generation", None)
+        value = loader(asset_type) if callable(loader) else None
+        return value if value is None or isinstance(value, str) else None
+
+    def _assert_data_generation(self, asset_type: str, expected: str | None) -> None:
+        if expected is None:
+            return
+        current = self._data_generation(asset_type)
+        if current != expected:
+            raise RuntimeError("enriched data changed while the snapshot was being read")
+
+    def _coverage(
+        self,
+        config: BacktestConfig,
+        panel: pd.DataFrame,
+        generation: str | None,
+    ) -> dict:
+        labels = self._last_loaded_labels or (
+            panel["date"].tolist() if not panel.empty and "date" in panel else ()
+        )
+        return coverage_from_labels(
+            labels,
+            asset_type=config.asset_type,
+            requested_start=config.start,
+            requested_end=config.end,
+            load_start=self._last_load_start or config.start - timedelta(days=_WARMUP_CALENDAR_DAYS),
+            load_end=self._last_load_end or config.end,
+            simulation_end=config.end,
+            warmup_start=config.start - timedelta(days=_WARMUP_CALENDAR_DAYS),
+            forward_end=config.end,
+            symbol_count=len(self._last_loaded_symbols) or (
+                panel["symbol"].nunique() if not panel.empty and "symbol" in panel else 0
+            ),
+            row_count=len(panel),
+            generation=generation,
+            source="enriched_parquet",
+            storage_path=str(getattr(getattr(self.repo, "store", None), "data_dir", ""))
+            or None,
+        ).to_dict()
+
+    def _provenance(
+        self,
+        run_id: str,
+        config: BacktestConfig,
+        coverage: dict,
+        validation,
+        started: str,
+    ) -> dict:
+        execution_config = {
+            **market_rules_contract(config.asset_type),
+            "matching": config.matching,
+            "fees_pct": config.fees_pct,
+            "slippage_bps": config.slippage_bps,
+            "stop_loss_pct": config.stop_loss_pct,
+            "max_hold_days": config.max_hold_days,
+        }
+        return BacktestProvenance(
+            run_id=run_id,
+            engine="signal_backtest",
+            asset_type=config.asset_type,
+            data_generation=coverage.get("generation"),
+            data_coverage=coverage,
+            data_source=coverage.get("source"),
+            storage_path=coverage.get("storage_path"),
+            market_rules_version=MARKET_RULES_VERSION,
+            parameters=_config_to_dict(config),
+            execution_config=execution_config,
+            validation=validation.to_dict(),
+            started_at=started,
+        ).to_dict()
 
     def _persist(self, result: BacktestResult) -> None:
         out_dir = settings.data_dir / "backtest_results"
@@ -414,6 +598,9 @@ def _config_to_dict(c: BacktestConfig) -> dict:
         "fees_pct": c.fees_pct,
         "slippage_bps": c.slippage_bps,
         "matching": c.matching,
+        "rsi_oversold_threshold": c.rsi_oversold_threshold,
+        "rsi_overbought_threshold": c.rsi_overbought_threshold,
+        "asset_type": c.asset_type,
     }
 
 
