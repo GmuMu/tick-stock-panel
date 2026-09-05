@@ -596,6 +596,29 @@ def get_capability_matrix() -> dict:
     )
 
 
+@router.get("/provider-health")
+def get_provider_health(provider: str | None = None, dataset: str | None = None) -> dict:
+    """Return runtime provider health and fallback counters.
+
+    Filters are optional and use the same canonical dataset/provider names as
+    the capability matrix. The endpoint is intentionally read-only.
+    """
+    from app.data_providers.health import get_provider_health_registry
+
+    rows = get_provider_health_registry().snapshot(provider=provider, dataset=dataset)
+    total_calls = sum(int(row["calls"]) for row in rows)
+    total_failures = sum(int(row["failures"]) for row in rows)
+    return {
+        "providers": rows,
+        "summary": {
+            "providers": len(rows),
+            "calls": total_calls,
+            "failures": total_failures,
+            "error_rate": round(total_failures / total_calls, 4) if total_calls else 0.0,
+        },
+    }
+
+
 @router.post("/plugin-key")
 def save_plugin_key(req: PluginKeyIn) -> dict:
     """保存插件 API Key(先探后存, 对齐 /tickflow-key 语义)。

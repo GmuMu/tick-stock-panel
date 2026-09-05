@@ -1,0 +1,11 @@
+# free-stockdb local HTTP bridge.
+# Configure FREE_STOCKDB_URL when the service is not listening on 127.0.0.1:8000.
+name: freestockdb
+display_name: "free-stockdb"
+runtime: none
+entry: app.plugins.freestockdb.provider:FreeStockDBProvider
+check: app.plugins.freestockdb.bridge:availability
+datasets: [daily, minute, realtime, adj_factor]
+description: "通过 HTTP Bridge 接入 free-stockdb 的日K、分钟K、Tick 快照和除权因子；策略与回测不直接依赖供应商实现。"
+install_hint: "启动 free-stockdb 服务，并设置 FREE_STOCKDB_URL（默认 http://127.0.0.1:8000）。可用 FREE_STOCKDB_*_PATH 覆盖接口路径。"
+homepage: "https://github.com/hello245m/free-stockdb"

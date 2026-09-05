@@ -206,7 +206,16 @@ def _candidate_health(candidate: dict) -> str:
     status = str(candidate.get("status") or "").strip().lower()
     if status in {"ok", "healthy", "ready", "available"}:
         return "healthy"
+    if status in {"unavailable", "down", "failed"}:
+        return "unavailable"
     return "degraded"
+
+
+def _observed_health(provider: str, dataset: str) -> str | None:
+    """Read runtime health without making capability discovery perform I/O."""
+    from app.data_providers.health import get_provider_health_registry
+
+    return get_provider_health_registry().health_for(provider, dataset)
 
 
 def _health_status(usable: bool, candidates: list[dict], effective: str) -> tuple[str, str]:
@@ -261,7 +270,14 @@ def build_capability_matrix(current: dict[str, str], tickflow_tier: str = "none"
                 "status": s["status"],
                 "note": None if s["available"] else (s["status"] or "不可用"),
             }
+            observed = _observed_health(s["name"], cap["id"])
+            if observed is not None:
+                entry["status"] = observed
             (candidates if s["available"] else pending).append(entry)
+        for candidate in candidates:
+            observed = _observed_health(candidate["name"], cap["id"])
+            if observed is not None:
+                candidate["status"] = observed
         usable = any(c["name"] == effective for c in candidates)
         status, health = _health_status(usable, candidates, effective)
         capabilities.append({

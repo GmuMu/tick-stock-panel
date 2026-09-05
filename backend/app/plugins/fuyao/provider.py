@@ -36,9 +36,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import ClassVar
 
 import polars as pl
 
+from app.data_providers.financial import normalize_financial
 from app.data_providers.normalizer import DAILY_COLS, normalize_daily
 from app.indicators.pipeline import filter_halt_days
 from app.plugins.fuyao import client as fuyao_client
@@ -762,7 +764,7 @@ class FuyaoProvider:
     # ---- financial ----
     # 字段映射: 扶摇原始字段 → 项目 canonical 列名(TickFlow 口径, 前端财务页与回测
     # FUNDAMENTAL_FACTORS 按此消费)。映射表之外的扶摇独有字段以原名透传为扩展列。
-    _INCOME_FIELD_MAP = {
+    _INCOME_FIELD_MAP: ClassVar[dict[str, str]] = {
         "operating_income": "revenue",
         "operating_costs": "operating_cost",
         "sales_fee": "selling_expense",
@@ -776,7 +778,7 @@ class FuyaoProvider:
         "parent_holder_net_profit": "net_income_attributable",
         "basic_eps": "basic_eps",
     }
-    _BALANCE_FIELD_MAP = {
+    _BALANCE_FIELD_MAP: ClassVar[dict[str, str]] = {
         "assets_total": "total_assets",
         "total_current_assets": "total_current_assets",
         "non_current_nets_total": "total_non_current_assets",
@@ -785,7 +787,7 @@ class FuyaoProvider:
         "total_debt": "total_liabilities",
         "holder_equity_total": "total_equity",
     }
-    _CASHFLOW_FIELD_MAP = {
+    _CASHFLOW_FIELD_MAP: ClassVar[dict[str, str]] = {
         "act_cash_flow_net": "net_operating_cash_flow",
         "invest_cash_flow_net": "net_investing_cash_flow",
         "financing_cash_flow_net": "net_financing_cash_flow",
@@ -794,7 +796,7 @@ class FuyaoProvider:
     }
     # 官方指标 index_id → canonical。归母净利同比近似 tickflow net_income_yoy;
     # 实测 index_id 与文档有出入(calculate_ 前缀等), 以实测为准。
-    _METRICS_FIELD_MAP = {
+    _METRICS_FIELD_MAP: ClassVar[dict[str, str]] = {
         "index_weighted_avg_roe": "roe",
         "total_assets_net_ratio": "roa",
         "sale_gross_margin": "gross_margin",
@@ -865,7 +867,12 @@ class FuyaoProvider:
                     if src not in field_map and src not in row and isinstance(value, (int, float)):
                         row[src] = value
                 rows_out.append(row)
-        return pl.DataFrame(rows_out) if rows_out else pl.DataFrame()
+        return normalize_financial(
+            rows_out,
+            stmt,
+            source=self.name,
+            symbols=symbols,
+        )
 
     def _financial_metrics(self, symbols: list[str]) -> pl.DataFrame:
         client = self._get_client()
@@ -910,7 +917,12 @@ class FuyaoProvider:
                         if value is not None:
                             row[self._METRICS_FIELD_MAP.get(index_id, index_id)] = value
             rows_out.append(row)
-        return pl.DataFrame(rows_out) if rows_out else pl.DataFrame()
+        return normalize_financial(
+            rows_out,
+            "metrics",
+            source=self.name,
+            symbols=symbols,
+        )
 
     def trading_days(self) -> set:
         """近一年交易日集合 (供交易日探针)。失败抛 FuyaoError, 由探针兜为未知。"""

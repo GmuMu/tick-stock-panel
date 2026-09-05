@@ -135,7 +135,7 @@
       <h1>A股智能策略交易平台<br>Development Plan V1.0</h1>
       <p class="subtitle">一张持续更新的开发地图：每个任务都绑定真实代码入口、当前状态、前置依赖和下一步动作。</p>
       <div class="meta">
-      <span>校准日期：<strong>2026-09-04</strong></span>
+      <span>校准日期：<strong>2026-09-05</strong></span>
         <span>当前分支：<strong>feat/0101-canonical-contracts</strong></span>
         <span>基线：<strong>25e5680</strong></span>
         <span>运行数据：<strong>data/ 不进入 Git</strong></span>
@@ -176,7 +176,7 @@
     <div id="empty" class="empty">没有匹配的任务。可以换一个关键词或筛选条件。</div>
 
     <footer class="footer">
-      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。下次开发优先从 <code>TASK-0104</code> 开始。
+      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。下次开发优先从 <code>TASK-0204</code> 开始。
     </footer>
   </main>
 
@@ -190,11 +190,11 @@
       ["Phase 1", "Canonical Contract 与 Capability Router", "TASK-0101", "Canonical Symbol / Date / Unit Contract", "done", "统一股票代码、交易日期、时间戳、百分比、价格、成交量和空值口径。", "backend/app/data_providers/schemas.py; normalizer.py; tests/test_canonical_contract.py", "已完成：canonical 转换函数、CanonicalQuoteMeta 和 Provider 边界测试已落地。", "feat/0101-canonical-contracts"],
       ["Phase 1", "Canonical Contract 与 Capability Router", "TASK-0102", "Data Capability Matrix", "done", "统一 daily、minute、realtime、financial、corporate action、sector、depth5 能力状态。", "backend/app/data_providers/capabilities.py; settings/capability-matrix; frontend/src/components/Layout.tsx", "已完成：DataCapability/CapabilityMatrix、provider/source/health/priority/status 契约与前端状态消费已落地。", "feat/0102-capability-matrix"],
       ["Phase 1", "Canonical Contract 与 Capability Router", "TASK-0103", "Capability Router", "done", "按 capability 选择 primary/fallback，业务层不直接依赖供应商 SDK。", "base.py::ProviderRoute; custom/loader.py::resolve_route; kline_sync.py; minute_refresh.py; quote_service.py; tests/test_capability_router.py", "已完成：daily、adj_factor、minute、full_minute、realtime 统一 fallback provenance；237 个受影响测试通过。", "feat/0101-canonical-contracts"],
-      ["Phase 1", "Canonical Contract 与 Capability Router", "TASK-0104", "DataQuality 与 MarketSession", "gap", "为数据质量、覆盖范围、时段和 stale 状态建立统一结果对象。", "market_time.py（已有时段工具，缺统一对象）", "依赖 0101/0103，新增 fail-closed 数据质量边界。", "feat/0104-data-quality-session"],
+      ["Phase 1", "Canonical Contract 与 Capability Router", "TASK-0104", "DataQuality 与 MarketSession", "done", "为数据质量、覆盖范围、时段和 stale 状态建立统一结果对象。", "market_time.py::MarketSession; data_quality.py::DataQuality; minute_refresh.py; quote_service.py; tests/test_data_quality_session.py", "已完成：统一北京时间市场阶段、数据质量状态和 fail-closed 结果；101 个受影响测试通过。", "feat/0101-canonical-contracts"],
 
-      ["Phase 2", "外部数据源与 Provider 治理", "TASK-0201", "free-stockdb Bridge / Provider", "gap", "接入 free-stockdb 的日 K、分钟 K、Tick 和除权数据。", "尚未发现正式 bridge；基座为 data_providers/base.py", "先实现最小 Bridge，不能从策略层直连 SDK。", "feat/0201-free-stockdb"],
-      ["Phase 2", "外部数据源与 Provider 治理", "TASK-0202", "Financial-API Provider / Dataset", "partial", "补充财务报表、指标、公司画像和特色数据的标准化 Provider。", "backend/app/plugins/fuyao/provider.py（已有 fuyao 财务适配）", "定义 financial canonical schema，再接第二数据源。", "feat/0202-financial-api"],
-      ["Phase 2", "外部数据源与 Provider 治理", "TASK-0203", "Provider Health / Retry / Fallback", "gap", "统一健康状态、失败率、重试、退避和 fallback 可观测性。", "现有服务只有局部异常处理，无统一治理模块。", "依赖 0102/0103，集中实现 Provider 健康治理。", "feat/0203-provider-health"],
+      ["Phase 2", "外部数据源与 Provider 治理", "TASK-0201", "free-stockdb Bridge / Provider", "done", "接入 free-stockdb 的日 K、分钟 K、Tick 和除权数据。", "plugins/freestockdb/bridge.py; plugins/freestockdb/provider.py; tests/test_freestockdb_provider.py", "已完成：HTTP Bridge、四类数据 Provider、canonical 归一化与 loader 注册；32 个定向回归通过。", "feat/0201-free-stockdb"],
+      ["Phase 2", "外部数据源与 Provider 治理", "TASK-0202", "Financial-API Provider / Dataset", "done", "补充财务报表、指标、公司画像和特色数据的标准化 Provider。", "data_providers/financial.py; plugins/fuyao/provider.py; services/financial_sync.py; tests/test_financial_contract.py", "已完成：五张财务表 canonical schema、多源同步收口、公告日和 source 保留；28 个财务回归通过。", "feat/0202-financial-api"],
+      ["Phase 2", "外部数据源与 Provider 治理", "TASK-0203", "Provider Health / Retry / Fallback", "done", "统一健康状态、失败率、重试、退避和 fallback 可观测性。", "data_providers/health.py; services/kline_sync.py; financial_sync.py; quote_service.py; settings/provider-health; tests/test_provider_health.py", "已完成：统一 ProviderHealthRegistry、指数退避、错误脱敏、fallback 事件和状态 API；83 个定向回归通过。", "feat/0203-provider-health"],
       ["Phase 2", "外部数据源与 Provider 治理", "TASK-0204", "Cross-Provider Golden", "gap", "用跨 Provider fixture 验证字段、单位、复权和报告期口径。", "已有 Provider 单测，缺跨源 golden baseline。", "依赖 0201/0202，新增 DATA_GOLDEN_BASELINE。", "test/0204-provider-golden"],
 
       ["Phase 3", "指标规范与增量一致性", "TASK-0301", "IndicatorSpec", "partial", "把指标定义、依赖列、窗口和版本变成可验证规范。", "backend/app/indicators/pipeline.py::compute_all", "抽出版本化 IndicatorSpec，不复制 pipeline。", "feat/0301-indicator-spec"],
@@ -333,7 +333,7 @@
       document.getElementById("percent").textContent = `${percent.toFixed(1)}%`;
       document.querySelector(".ring").style.setProperty("--progress", `${percent}%`);
       document.getElementById("summary-title").textContent = `${counts.done}/${tasks.length} 个任务已完成`;
-      document.getElementById("summary-text").textContent = `当前阶段：TASK-0104 · DataQuality 与 MarketSession。部分完成项表示已有基础但还没有达到计划验收边界。`;
+      document.getElementById("summary-text").textContent = `当前阶段：TASK-0204 · Cross-Provider Golden。部分完成项表示已有基础但还没有达到计划验收边界。`;
     }
 
     document.querySelectorAll("[data-filter]").forEach(button => {

@@ -45,11 +45,15 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import polars as pl
 
-from app.market_time import cn_now, cn_today, in_continuous_session
+from app.data_quality import DataQuality
+from app.data_providers.base import ProviderRoute
+from app.data_providers.health import record_route_fallback
+from app.market_time import CN_TZ, cn_now, cn_today, in_continuous_session, market_session
 from app.services import preferences
 
 logger = logging.getLogger(__name__)
@@ -188,6 +192,17 @@ class MinuteRefreshService:
                 "fallback": True,
                 "fallback_reason": "provider_resolution_failed" if err else "dataset_unavailable",
             }
+            if record_provenance:
+                record_route_fallback(
+                    ProviderRoute(
+                        dataset="full_minute",
+                        requested_provider=name,
+                        effective_provider="tickflow",
+                        fallback=True,
+                        fallback_reason=route_provenance["fallback_reason"],
+                        error=err,
+                    )
+                )
             if record_provenance:
                 self._state.route_provenance = route_provenance
             if err is not None:
@@ -419,11 +434,33 @@ class MinuteRefreshService:
         interval = preferences.get_minute_refresh_interval()
         return (time.time() - float(last)) <= max(2.0 * interval, 30.0)
 
+    def data_quality(self, now=None) -> DataQuality:
+        """返回全量分钟本地分区的严格 freshness 结果。"""
+        interval = preferences.get_minute_refresh_interval()
+        stale_after = max(2.0 * interval, 30.0)
+        observed_at = (
+            datetime.fromtimestamp(float(self._state.last_round_at), tz=CN_TZ)
+            if self._state.last_round_at is not None
+            else None
+        )
+        return DataQuality.from_observation(
+            "full_minute",
+            observed_at=observed_at,
+            now=now or cn_now(),
+            stale_after_seconds=stale_after,
+            actual_rows=self._state.last_rows,
+            reason="last_round_succeeded",
+        )
+
     def status(self) -> dict[str, Any]:
         import contextlib
 
         with contextlib.suppress(Exception):
             enabled = preferences.get_minute_refresh_enabled()
+        from app.services import trading_day
+
+        now = cn_now()
+        session = market_session(now, trading_day=trading_day.is_trading_day(now))
         running = self._thread is not None and self._thread.is_alive()
         gate = self._gate_reason()
         return {
@@ -433,6 +470,8 @@ class MinuteRefreshService:
             "provider": self.active_provider(),
             "provider_effective": self._resolve_custom(record_provenance=False)[1],
             "route_provenance": dict(self._state.route_provenance),
+            "market_session": session.to_dict(),
+            "data_quality": self.data_quality().to_dict(),
             "repair_only": self.repair_only(),
             "interval_seconds": preferences.get_minute_refresh_interval(),
             "capability_ok": self.capability_ok(),

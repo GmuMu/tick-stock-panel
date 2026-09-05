@@ -30,15 +30,15 @@
 | TASK-0101 | DONE | `schemas.py` 提供 `normalize_symbol/date/epoch_ms/price/ratio/volume/amount` 与不可变 `CanonicalQuoteMeta`；daily、adj_factor、instrument normalizer 已接入，契约测试覆盖 Provider 边界 | 进入 `TASK-0102`，补正式 capability health/priority/status 契约 |
 | TASK-0102 | DONE | `capabilities.py` 提供 `DataCapability`/`CapabilityMatrix` 类型、provider/source/priority/health/status；`/api/settings/capability-matrix` 注入全部路由字段；矩阵、API 和前端状态消费测试/构建通过 | 进入 `TASK-0103`，统一 fallback provenance |
 | TASK-0103 | DONE | `ProviderRoute`/`custom.loader.resolve_route` 统一 daily、adj_factor、minute、full_minute、realtime 路由；自定义源调用/契约失败立即回退 TickFlow，`kline_sync`、`minute_refresh`、`quote_service` 暴露可序列化 provenance；237 个受影响测试通过 | 进入 `TASK-0104`，建立 DataQuality 与 MarketSession fail-closed 边界 |
-| TASK-0104 | GAP | `market_time.py` 有交易时段工具，但未发现统一 `DataQuality` 与完整 `MarketSession` 结果对象 | 依赖 0101/0103，新增 fail-closed 数据质量边界 |
+| TASK-0104 | DONE | `market_time.py::MarketSession/market_session` 统一北京时间阶段、交易日、轮询窗口和连续竞价；`data_quality.py::DataQuality` 统一 coverage/stale/missing/invalid 与 fail-closed；minute-refresh、quote status 已接入，101 个受影响测试通过 | 进入 `TASK-0201`，实现最小 free-stockdb Bridge |
 
 ## Phase 2：外部数据源与 Provider 治理
 
 | Task | 状态 | 真实证据 / 入口 | 下一步 |
 | --- | --- | --- | --- |
-| TASK-0201 | GAP | 未发现 free-stockdb bridge 或正式 Provider；现有入口是 `data_providers/base.py` 与 custom loader | 先做最小 bridge，禁止在 Strategy/Backtest 直接导入供应商 SDK |
-| TASK-0202 | PARTIAL | `backend/app/plugins/fuyao/provider.py` 已适配财务、日 K、实时和除权；未发现 Financial-API Provider | 明确 financial canonical schema，再接第二数据源 |
-| TASK-0203 | GAP | 现有各服务有局部异常处理和重试，无统一 provider health/error-rate/fallback registry | 依赖 0102/0103，集中实现观测与重试策略 |
+| TASK-0201 | DONE | `plugins/freestockdb/bridge.py` 提供可配置 HTTP Bridge；`FreeStockDBProvider` 接入 daily、minute、realtime(Tick)、adj_factor 和 instruments，并经 custom loader/能力矩阵注册；32 个定向回归通过 | 进入 `TASK-0202`，定义 financial canonical schema |
+| TASK-0202 | DONE | `data_providers/financial.py` 定义五张财务表 canonical schema；扶摇、TickFlow 和自定义 HTTP 财务源在 `financial_sync` 统一归一化，保留公告日、source 和扩展字段；28 个财务回归通过 | 进入 `TASK-0203`，集中实现 Provider health/retry/fallback |
+| TASK-0203 | DONE | `data_providers/health.py` 提供线程安全 ProviderHealthRegistry、RetryPolicy、指数退避、错误脱敏和 fallback 记录；kline、minute、financial、quote 服务统一接入；`/api/settings/provider-health` 暴露状态与 error rate；83 个定向回归通过 | 进入 `TASK-0204`，建立跨 Provider golden baseline |
 | TASK-0204 | GAP | 已有 Provider 单元测试，但无跨 Provider golden baseline | 依赖 0201/0202，新增 `docs/data/DATA_GOLDEN_BASELINE.md` 与 fixture |
 
 ## Phase 3：指标规范与增量一致性
@@ -156,7 +156,7 @@
 
 ## 执行结论
 
-1. `TASK-0101`、`TASK-0102`、`TASK-0103` 已完成，当前分支为 `feat/0101-canonical-contracts`；下一步进入 `TASK-0104`，现有工作树改动仍由维护者决定提交或携带。
+1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0203` 已完成，当前分支为 `feat/0101-canonical-contracts`；下一步进入 `TASK-0204`，现有工作树改动仍由维护者决定提交或携带。
 2. `full_minute` YAML 解析断点仍是已确认缺口，依赖它的自定义全量分钟任务不得宣称端到端完成。
 3. 交易、OMS、QMT 和实盘相关任务全部保持 `GAP/BLOCKED`，在没有风险、幂等、审计和 Kill Switch 之前不接真实交易。
 4. 以后每个 Task 必须先补契约测试，再实现代码；完成后更新对应 `docs/tasks/TASK-xxxx-*.md`，不以“页面能打开”代替验收。

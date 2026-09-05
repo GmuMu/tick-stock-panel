@@ -1560,6 +1560,37 @@ export interface CapabilityMatrix {
   capabilities: CapabilityRoute[]
 }
 
+export interface ProviderHealthRow {
+  provider: string
+  dataset: string
+  health: 'healthy' | 'degraded' | 'unavailable'
+  calls: number
+  successes: number
+  failures: number
+  error_rate: number
+  retries: number
+  last_retry_delay_seconds: number | null
+  fallbacks: number
+  consecutive_failures: number
+  last_error: string | null
+  last_failure_at: string | null
+  last_success_at: string | null
+  last_fallback_at: string | null
+  last_latency_ms: number | null
+  average_latency_ms: number | null
+  updated_at: string | null
+}
+
+export interface ProviderHealthResponse {
+  providers: ProviderHealthRow[]
+  summary: {
+    providers: number
+    calls: number
+    failures: number
+    error_rate: number
+  }
+}
+
 export interface DataSourceLoadError {
   name?: string
   path: string
@@ -1740,6 +1771,15 @@ export const api = {
     }),
 
   settings: () => request<SettingsState>('/api/settings'),
+  providerHealth: (provider?: string, dataset?: string) => {
+    const params = new URLSearchParams()
+    if (provider) params.set('provider', provider)
+    if (dataset) params.set('dataset', dataset)
+    const query = params.toString()
+    return request<ProviderHealthResponse>(
+      `/api/settings/provider-health${query ? `?${query}` : ''}`,
+    )
+  },
   saveTickflowKey: (api_key: string) =>
     request<SaveTickflowKeyResult>('/api/settings/tickflow-key', {
       method: 'POST',
@@ -1877,6 +1917,29 @@ export const api = {
       last_requests?: number
       next_round_at?: number | null
       last_error?: string | null
+      market_session?: {
+        date: string
+        phase: string
+        trading_day: boolean | null
+        is_continuous: boolean
+        is_polling_window: boolean
+        can_poll: boolean
+        elapsed_minutes: number
+        reason: string
+      }
+      data_quality?: {
+        dataset: string
+        status: 'FRESH' | 'PARTIAL' | 'STALE' | 'MISSING' | 'INVALID'
+        usable: boolean
+        fail_closed: boolean
+        coverage_ratio: number | null
+        expected_rows: number | null
+        actual_rows: number | null
+        observed_at: string | null
+        age_seconds: number | null
+        stale_after_seconds: number | null
+        reason: string
+      }
     }>('/api/settings/minute-refresh/status'),
   updatePipelinePullTypes: (cfg: Partial<Pick<Preferences, 'pipeline_pull_a_share' | 'pipeline_pull_etf' | 'pipeline_pull_index'>>) =>
     request<{
@@ -1936,6 +1999,29 @@ export const api = {
       final_sync_done?: boolean
       final_sync_failed?: string | null
       last_fetch_ms: number | null
+      market_session?: {
+        date: string
+        phase: string
+        trading_day: boolean | null
+        is_continuous: boolean
+        is_polling_window: boolean
+        can_poll: boolean
+        elapsed_minutes: number
+        reason: string
+      }
+      data_quality?: {
+        dataset: string
+        status: 'FRESH' | 'PARTIAL' | 'STALE' | 'MISSING' | 'INVALID'
+        usable: boolean
+        fail_closed: boolean
+        coverage_ratio: number | null
+        expected_rows: number | null
+        actual_rows: number | null
+        observed_at: string | null
+        age_seconds: number | null
+        stale_after_seconds: number | null
+        reason: string
+      }
       realtime_route?: {
         dataset: string
         requested_provider: string

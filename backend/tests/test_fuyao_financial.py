@@ -191,7 +191,7 @@ def test_metrics_indicator_failure_keeps_row(monkeypatch):
     row = df.to_dicts()[0]
     assert row["symbol"] == "600519.SH"
     assert row["eps_basic"] == 35.57
-    assert "roe" not in df.columns
+    assert "roe" in df.columns and row["roe"] is None
 
 
 def test_metrics_skips_symbol_without_income(monkeypatch):

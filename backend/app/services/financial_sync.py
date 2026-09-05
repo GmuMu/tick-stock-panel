@@ -10,10 +10,10 @@ import logging
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
-
 import polars as pl
 
+from app.data_providers.financial import normalize_financial
+from app.data_providers.health import call_with_retry
 from app.tickflow.capabilities import Cap, CapabilitySet
 
 logger = logging.getLogger(__name__)
@@ -69,17 +69,31 @@ def _fetch_table(
 
     # 自定义数据源分流
     if is_custom:
-        from app.services import preferences
         from app.data_providers import custom as custom_sources
+        from app.services import preferences
         try:
             provider = custom_sources.get_provider(preferences.get_financial_provider())
-            df = provider.get_financials(table, symbols, latest_only=latest_only)
+            provider_name = str(
+                getattr(provider, "name", "") or preferences.get_financial_provider()
+            )
+            df = call_with_retry(
+                provider_name,
+                "financial",
+                lambda: provider.get_financials(
+                    table, symbols, latest_only=latest_only,
+                ),
+            )
         except Exception as e:  # noqa: BLE001
             logger.warning("sync_%s custom provider failed: %s", table, e)
             return pl.DataFrame()
-        if df.is_empty() or "symbol" not in df.columns:
+        if df.is_empty():
             return pl.DataFrame()
-        return df
+        return normalize_financial(
+            df,
+            table,
+            source=str(getattr(provider, "name", "") or preferences.get_financial_provider()),
+            symbols=symbols,
+        )
 
     from app.tickflow.client import get_client
     tf = get_client()
@@ -103,7 +117,11 @@ def _fetch_table(
         chunk = symbols[i : i + _BATCH_SIZE]
         batch_num = i // _BATCH_SIZE + 1
         try:
-            data = api_method(chunk, latest=latest_only)
+            data = call_with_retry(
+                "tickflow",
+                "financial",
+                lambda chunk=chunk: api_method(chunk, latest=latest_only),
+            )
             # data 格式: { "600519.SH": [record, ...], ... }
             if isinstance(data, dict):
                 for sym, records in data.items():
@@ -122,7 +140,7 @@ def _fetch_table(
     df = pl.DataFrame(all_records)
     if df.is_empty() or "symbol" not in df.columns:
         return pl.DataFrame()
-    return df
+    return normalize_financial(df, table, source="tickflow", symbols=symbols)
 
 
 def _write_table(table: str, df: pl.DataFrame, data_dir: Path) -> int:

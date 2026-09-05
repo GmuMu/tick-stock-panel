@@ -14,6 +14,10 @@ from datetime import date, datetime, timedelta
 import polars as pl
 
 from app.data_providers.base import AssetType, ProviderRoute
+from app.data_providers.health import (
+    call_with_retry,
+    record_route_fallback,
+)
 from app.indicators.pipeline import filter_halt_days
 from app.market_time import CN_TZ, cn_now, cn_today
 from app.services import preferences
@@ -27,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 def _copy_route_provenance(out: dict | None, route: ProviderRoute) -> None:
     """Copy serializable route evidence into an optional caller-owned dict."""
+    record_route_fallback(route)
     if out is not None:
         out.clear()
         out.update(route.provenance())
@@ -120,16 +125,26 @@ def sync_daily_batch(symbols: list[str],
         sleep_between_batches(i, rpm)
         try:
             if start_time and end_time:
-                raw = tf.klines.batch(
-                    chunk, period="1d", adjust="none",
-                    start_time=_datetime_to_ms(start_time),
-                    end_time=_datetime_to_ms(end_time),
-                    count=10000,
-                    as_dataframe=False, show_progress=False,
+                raw = call_with_retry(
+                    "tickflow",
+                    "daily",
+                    lambda chunk=chunk: tf.klines.batch(
+                        chunk, period="1d", adjust="none",
+                        start_time=_datetime_to_ms(start_time),
+                        end_time=_datetime_to_ms(end_time),
+                        count=10000,
+                        as_dataframe=False, show_progress=False,
+                    ),
                 )
             else:
-                raw = tf.klines.batch(chunk, period="1d", count=count or 250, adjust="none",
-                                      as_dataframe=False, show_progress=False)
+                raw = call_with_retry(
+                    "tickflow",
+                    "daily",
+                    lambda chunk=chunk: tf.klines.batch(
+                        chunk, period="1d", count=count or 250, adjust="none",
+                        as_dataframe=False, show_progress=False,
+                    ),
+                )
         except Exception as e:  # noqa: BLE001
             logger.warning("batch fetch failed for %d symbols (chunk %d/%d): %s",
                            len(chunk), i + 1, len(chunks), e)
@@ -185,11 +200,15 @@ def sync_and_persist_daily_batch(
             end_time = end_date or datetime.now()
             days = count or 365
             start_time = start_date or (end_time - timedelta(days=days))
-            df = provider.get_daily(
-                symbols,
-                start_time=start_time,
-                end_time=end_time,
-                on_chunk_done=on_chunk_done,
+            df = call_with_retry(
+                provider_name,
+                "daily",
+                lambda: provider.get_daily(
+                    symbols,
+                    start_time=start_time,
+                    end_time=end_time,
+                    on_chunk_done=on_chunk_done,
+                ),
             )
         except Exception as e:  # noqa: BLE001
             route = route.with_fallback("provider_call_failed", error=str(e))
@@ -358,12 +377,16 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
     if route.provider is not None:
         provider = route.provider
         try:
-            new_data = provider.get_adj_factors(
-                symbols,
-                start_time=start_time,
-                end_time=end_time,
-                asset_type=asset_type,
-                on_chunk_done=on_chunk_done,
+            new_data = call_with_retry(
+                provider_name,
+                "adj_factor",
+                lambda: provider.get_adj_factors(
+                    symbols,
+                    start_time=start_time,
+                    end_time=end_time,
+                    asset_type=asset_type,
+                    on_chunk_done=on_chunk_done,
+                ),
             )
         except Exception as e:  # noqa: BLE001
             route = route.with_fallback("provider_call_failed", error=str(e))
@@ -419,7 +442,11 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
     for i, chunk in enumerate(chunks):
         sleep_between_batches(i, limit.rpm)
         try:
-            raw = tf.klines.ex_factors(chunk, **sdk_kwargs)
+            raw = call_with_retry(
+                "tickflow",
+                "adj_factor",
+                lambda chunk=chunk: tf.klines.ex_factors(chunk, **sdk_kwargs),
+            )
             normalized = _normalize_adj_factor(raw)
             if not normalized.is_empty():
                 all_dfs.append(normalized)
@@ -766,9 +793,13 @@ def _try_custom_minute(
         wrapped_cb = _wrapped_cb
 
     try:
-        df = provider.get_minute(
-            symbols, start_time=start_time, end_time=end_time,
-            asset_type=asset_type, freq=freq, on_chunk_done=wrapped_cb,
+        df = call_with_retry(
+            provider_name,
+            "minute",
+            lambda: provider.get_minute(
+                symbols, start_time=start_time, end_time=end_time,
+                asset_type=asset_type, freq=freq, on_chunk_done=wrapped_cb,
+            ),
         )
     except Exception as e:
         route = route.with_fallback("provider_call_failed", error=str(e))
@@ -873,18 +904,28 @@ def sync_minute_batch(
             step += 1
             try:
                 if cur_start and cur_end:
-                    raw = tf.klines.batch(
-                        chunk, period="1m",
-                        start_time=_datetime_to_ms(cur_start),
-                        end_time=_datetime_to_ms(cur_end),
-                        count=10000,
-                        adjust="forward",
-                        as_dataframe=False, show_progress=False,
+                    raw = call_with_retry(
+                        "tickflow",
+                        "minute",
+                        lambda chunk=chunk, cur_start=cur_start, cur_end=cur_end: tf.klines.batch(
+                            chunk, period="1m",
+                            start_time=_datetime_to_ms(cur_start),
+                            end_time=_datetime_to_ms(cur_end),
+                            count=10000,
+                            adjust="forward",
+                            as_dataframe=False, show_progress=False,
+                        ),
                     )
                 else:
-                    raw = tf.klines.batch(chunk, period="1m", count=count or 1200,
-                                          adjust="forward",
-                                          as_dataframe=False, show_progress=False)
+                    raw = call_with_retry(
+                        "tickflow",
+                        "minute",
+                        lambda chunk=chunk: tf.klines.batch(
+                            chunk, period="1m", count=count or 1200,
+                            adjust="forward",
+                            as_dataframe=False, show_progress=False,
+                        ),
+                    )
             except Exception as e:  # noqa: BLE001
                 logger.warning("minute batch fetch failed for %d symbols: %s", len(chunk), e)
                 continue
@@ -1035,9 +1076,13 @@ def fetch_intraday_full_market_burst(
         # 单块独立容错: 异常作为返回值上交而不是抛出, 避免一个块把整轮
         # 已成功的数据一起拖垮 (pool.map 迭代中抛异常会废弃全部已收 frames)
         try:
-            raw = tf.klines.intraday_batch(
-                chunk, count=count, as_dataframe=False, show_progress=False,
-                batch_size=len(chunk),
+            raw = call_with_retry(
+                "tickflow",
+                "full_minute",
+                lambda chunk=chunk: tf.klines.intraday_batch(
+                    chunk, count=count, as_dataframe=False, show_progress=False,
+                    batch_size=len(chunk),
+                ),
             )
             seg = _normalize_minute(_compact_klines_to_df(raw))
             return ([seg] if not seg.is_empty() else [], None)
@@ -1098,7 +1143,13 @@ def fetch_intraday_universe_increment(
     """
     tf = get_client()
     try:
-        raw = tf.klines.intraday_universe(universe, count=count, as_dataframe=False)
+        raw = call_with_retry(
+            "tickflow",
+            "full_minute",
+            lambda: tf.klines.intraday_universe(
+                universe, count=count, as_dataframe=False,
+            ),
+        )
     except Exception as e:
         logger.warning("intraday universe fetch failed (%s): %s", universe, e)
         return (pl.DataFrame(), 0)
@@ -1146,7 +1197,11 @@ def fetch_intraday_custom_batch(
     try:
         method = getattr(provider, "get_intraday_batch", None)
         if callable(method):
-            df = method(symbols)
+            df = call_with_retry(
+                provider_name,
+                "full_minute",
+                lambda: method(symbols),
+            )
             requests = 1
         else:
             counted = {"requests": 0}
@@ -1156,9 +1211,13 @@ def fetch_intraday_custom_batch(
 
             end = cn_now()
             start = end.replace(hour=0, minute=0, second=0, microsecond=0)
-            df = provider.get_minute(
-                symbols, start_time=start, end_time=end,
-                asset_type="stock", freq="1m", on_chunk_done=_count_requests,
+            df = call_with_retry(
+                provider_name,
+                "full_minute",
+                lambda: provider.get_minute(
+                    symbols, start_time=start, end_time=end,
+                    asset_type="stock", freq="1m", on_chunk_done=_count_requests,
+                ),
             )
             requests = counted["requests"]
     except Exception as e:  # noqa: BLE001
@@ -1199,7 +1258,11 @@ def fetch_intraday_custom_latest(
     if not callable(method):
         return None
     try:
-        df = method(count=count)
+        df = call_with_retry(
+            provider_name,
+            "full_minute",
+            lambda: method(count=count),
+        )
     except Exception as e:  # noqa: BLE001
         route = route.with_fallback("provider_call_failed", error=str(e))
         _copy_route_provenance(provenance_out, route)
@@ -1240,13 +1303,17 @@ def fetch_minute_single(
 
     tf = get_client()
     try:
-        raw = tf.klines.batch(
-            [symbol], period="1m",
-            start_time=_datetime_to_ms(start_time),
-            end_time=_datetime_to_ms(end_time),
-            count=10000,
-            adjust="forward",
-            as_dataframe=False, show_progress=False,
+        raw = call_with_retry(
+            "tickflow",
+            "minute",
+            lambda: tf.klines.batch(
+                [symbol], period="1m",
+                start_time=_datetime_to_ms(start_time),
+                end_time=_datetime_to_ms(end_time),
+                count=10000,
+                adjust="forward",
+                as_dataframe=False, show_progress=False,
+            ),
         )
     except Exception as e:
         logger.warning("fetch_minute_single(%s, %s) failed: %s", symbol, trade_date, e)
@@ -1263,7 +1330,13 @@ def fetch_adj_factor_single(symbol: str) -> pl.DataFrame:
     """
     tf = get_client()
     try:
-        raw = tf.klines.ex_factors([symbol], as_dataframe=False, show_progress=False)
+        raw = call_with_retry(
+            "tickflow",
+            "adj_factor",
+            lambda: tf.klines.ex_factors(
+                [symbol], as_dataframe=False, show_progress=False,
+            ),
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning("fetch_adj_factor_single(%s) failed: %s", symbol, e)
         return pl.DataFrame()

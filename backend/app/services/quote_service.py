@@ -33,7 +33,9 @@ from datetime import date, datetime, time as dt_time
 
 import polars as pl
 
-from app.market_time import cn_now, cn_today
+from app.data_providers.health import call_with_retry, record_route_fallback
+from app.data_quality import DataQuality
+from app.market_time import CN_TZ, cn_now, cn_today, market_session
 from app.parquet import scan_daily_parquet
 from app.services.index_const import CORE_INDEX_SYMBOLS
 from app.strategy.intraday_signals import IntradaySignalEvaluator
@@ -544,10 +546,27 @@ class QuoteService:
         """返回行情服务状态。"""
         age = (time.perf_counter() - self._fetch_time) * 1000 if self._fetch_time else -1
         mode = self.realtime_mode()
-        phase = self._market_phase()
+        from app.services import trading_day
+
+        now = cn_now()
+        session = market_session(now, trading_day=trading_day.is_trading_day(now))
+        phase = session.phase
         final_key = self._final_sync_key(phase)
         final_done = bool(final_key and final_key in self._final_sync_done)
         final_failed = self._final_sync_failed.get(final_key) if final_key else None
+        observed_at = (
+            datetime.fromtimestamp(self._fetched_at / 1000.0, tz=CN_TZ)
+            if self._fetched_at
+            else None
+        )
+        data_quality = DataQuality.from_observation(
+            "realtime",
+            observed_at=observed_at,
+            now=cn_now(),
+            stale_after_seconds=max(2.0 * self._interval, 30.0),
+            actual_rows=self._symbol_count + self._etf_symbol_count,
+            reason="last_fetch_succeeded",
+        )
         return {
             "enabled": self._enabled,
             "running": self._running,
@@ -563,6 +582,8 @@ class QuoteService:
             "is_trading_hours": self._is_continuous_trading(),
             "is_polling_window": self._should_poll_for_phase(phase),
             "market_phase": phase,
+            "market_session": session.to_dict(),
+            "data_quality": data_quality.to_dict(),
             "final_sync_done": final_done,
             "final_sync_failed": final_failed,
             "last_fetch_ms": round(self._fetched_at, 0) if self._fetched_at else None,
@@ -628,7 +649,11 @@ class QuoteService:
                 t0 = time.perf_counter()
                 now_ts = time.perf_counter()
                 provider = route.provider
-                records = provider.get_realtime()
+                records = call_with_retry(
+                    provider_name,
+                    "realtime",
+                    provider.get_realtime,
+                )
                 # 指数补充: A 股快照通常不含指数。插件可选实现
                 # get_realtime_indices(symbols) 用独立端点补拉 (如 fuyao 指数快照);
                 # 未实现的源指数缓存为空, 由日K兜底接管。
@@ -637,7 +662,11 @@ class QuoteService:
                 if callable(fetch_indices):
                     wanted = sorted(set(CORE_INDEX_SYMBOLS) | self._collect_monitor_index_symbols())
                     try:
-                        fetched_indices = fetch_indices(wanted)
+                        fetched_indices = call_with_retry(
+                            provider_name,
+                            "realtime",
+                            lambda: fetch_indices(wanted),
+                        )
                         if fetched_indices is None:
                             replace_index_cache = False
                         else:
@@ -661,6 +690,7 @@ class QuoteService:
 
         with self._lock:
             self._realtime_route = route.provenance()
+        record_route_fallback(route)
         if route.fallback and route.error is not None:
             logger.warning("自定义实时源 %s 解析失败, falling back to TickFlow: %s",
                            provider_name, route.error)
@@ -698,13 +728,25 @@ class QuoteService:
             if universes:
                 _u0 = time.perf_counter()
                 logger.info("拉取全市场行情 (universes=%s, SDK超时=30s×重试3)", universes)
-                resp.extend(tf.quotes.get_by_universes(universes=universes) or [])
+                resp.extend(
+                    call_with_retry(
+                        "tickflow",
+                        "realtime",
+                        lambda: tf.quotes.get_by_universes(universes=universes) or [],
+                    )
+                )
                 logger.info("全市场行情拉取完成: %d 条 (%.2fs)", len(resp), time.perf_counter() - _u0)
             # 指数: 固定核心四只 + 监控规则标的, 按码显式拉取
             _core_syms = sorted(core_index_symbols | monitor_index_symbols)
             if _core_syms:
                 _i0 = time.perf_counter()
-                resp.extend(tf.quotes.get(symbols=_core_syms) or [])
+                resp.extend(
+                    call_with_retry(
+                        "tickflow",
+                        "realtime",
+                        lambda: tf.quotes.get(symbols=_core_syms) or [],
+                    )
+                )
                 logger.info("核心指数行情拉取完成: %d 只 (%.2fs)", len(_core_syms), time.perf_counter() - _i0)
         except Exception as e:  # noqa: BLE001
             logger.warning("行情拉取失败 (%.2fs): %s", time.perf_counter() - t0, e)
@@ -968,23 +1010,10 @@ class QuoteService:
 
         final 阶段用于午休/收盘定版: 需要至少成功拉取一版边界后的行情, 才算进入休盘。
         """
+        from app.services import trading_day
+
         now = cn_now()
-        if now.weekday() >= 5:
-            return "closed"
-        t = now.time()
-        if dt_time(9, 15) <= t < dt_time(9, 30):
-            return "preopen"
-        if dt_time(9, 30) <= t < dt_time(11, 30):
-            return "morning"
-        if dt_time(11, 30) <= t < dt_time(12, 55):
-            return "morning_final"
-        if dt_time(12, 55) <= t < dt_time(13, 0):
-            return "pre_afternoon"
-        if dt_time(13, 0) <= t < dt_time(15, 0):
-            return "afternoon"
-        if t >= dt_time(15, 0):
-            return "close_final"
-        return "closed"
+        return market_session(now, trading_day=trading_day.is_trading_day(now)).phase
 
     @staticmethod
     def _final_sync_key(phase: str) -> tuple[date, str] | None:
@@ -1037,11 +1066,10 @@ class QuoteService:
         午间与 15:00 后收盘缓冲。监控评估只在此窗口进行, 不对竞价/收盘后的陈旧价告警。
         (节假日由 _evaluate_monitors 里的「快照日期=当日」新鲜度判据兜底, 无需交易日历。)
         """
+        from app.services import trading_day
+
         now = cn_now()
-        t = now.time()
-        morning = dt_time(9, 30) <= t <= dt_time(11, 30)
-        afternoon = dt_time(13, 0) <= t <= dt_time(15, 0)
-        return now.weekday() < 5 and (morning or afternoon)
+        return market_session(now, trading_day=trading_day.is_trading_day(now)).is_continuous
 
     @staticmethod
     def _save_enabled(enabled: bool) -> None:
