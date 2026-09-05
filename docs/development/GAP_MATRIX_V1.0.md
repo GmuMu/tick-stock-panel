@@ -1,9 +1,9 @@
 # Development Plan V1.0 GAP Matrix
 
-校准日期：2026-09-04
+校准日期：2026-09-05
 仓库：`tick-stock-panel`
 基线：`25e5680`
-当前分支：`feat/sequoia-x-strategies`
+当前分支：`feat/0301-indicator-spec`
 
 ## 判定规则
 
@@ -46,10 +46,10 @@
 
 | Task | 状态 | 真实证据 / 入口 | 下一步 |
 | --- | --- | --- | --- |
-| TASK-0301 | PARTIAL | `backend/app/indicators/pipeline.py::compute_all` 已是统一计算入口 | 抽出可版本化 `IndicatorSpec`，不复制 pipeline |
-| TASK-0302 | PARTIAL | `test_*indicator*`、`test_enriched_*` 已有局部指标回归 | 增加 golden 值和列级契约 |
-| TASK-0303 | PARTIAL | `backend/app/indicators/levels.py` 与股票分析服务已有关键价位 | 对齐价格口径、复权口径和缺失质量状态 |
-| TASK-0304 | PARTIAL | `compute_enriched_today`、实时 enriched 与多个增量测试已存在 | 用同一 IndicatorSpec 证明 batch/incremental parity |
+| TASK-0301 | DONE | `backend/app/indicators/spec.py` 提供版本化不可变 `IndicatorSpec`、完整指标/内部列注册表、依赖闭包和无环校验；`pipeline.py` 已复用规范；`tests/test_indicator_spec.py` 与 52 个相关回归通过 | 进入 `TASK-0302`，固化指标数值、列集合和边界输入 golden |
+| TASK-0302 | DONE | `backend/tests/fixtures/indicator_golden/indicators.json` 固定 70 根离线日线输入、全部公开指标列和最新值；`tests/test_indicator_golden.py` 覆盖版本绑定、列集合、数值和边界；55 个相关回归通过 | 进入 `TASK-0303`，统一关键价位、复权价格和缺失质量状态 |
+| TASK-0303 | DONE | `levels.py` 已明确 adjusted/canonical OHLC 口径并接入 `DataQuality`；`/api/stock-analysis/levels` 与 AI meta 暴露 `price_basis/data_quality`；`tests/test_price_levels_contract.py` 与 28 个相关回归通过 | 进入 `TASK-0304`，证明盘后 batch 与盘中 incremental 指标一致 |
+| TASK-0304 | DONE | `compute_enriched_today` 与 live aggregation 已修正 EMA/RSI 状态窗口、样本方差和 close 极值口径；`tests/test_indicator_incremental_parity.py` 通过真实状态构建验证 batch/incremental 一致；31 个相关回归通过 | 进入 Phase 4 `TASK-0401`，补策略版本、生命周期和 provenance 合同 |
 
 ## Phase 4：策略合同与 EOD 执行
 
@@ -157,7 +157,7 @@
 
 ## 执行结论
 
-1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0205` 已完成，当前分支为 `feat/sequoia-x-strategies`；下一步回到 `TASK-0301`，Sequoia-X 的 `PrivatePlacement` 因公司行为数据缺口暂不实现。
+1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0205`、`TASK-0301` 至 `TASK-0304` 已完成，当前分支为 `feat/0301-indicator-spec`；下一步进入 Phase 4 `TASK-0401`，Sequoia-X 的 `PrivatePlacement` 因公司行为数据缺口暂不实现。
 2. `full_minute` YAML 解析断点仍是已确认缺口，依赖它的自定义全量分钟任务不得宣称端到端完成。
 3. 交易、OMS、QMT 和实盘相关任务全部保持 `GAP/BLOCKED`，在没有风险、幂等、审计和 Kill Switch 之前不接真实交易。
 4. 以后每个 Task 必须先补契约测试，再实现代码；完成后更新对应 `docs/tasks/TASK-xxxx-*.md`，不以“页面能打开”代替验收。

@@ -16,12 +16,18 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 import polars as pl
 
-from app.indicators.levels import compute_levels, summarize_levels
+from app.indicators.levels import (
+    compute_levels,
+    level_data_quality,
+    level_price_basis,
+    summarize_levels,
+)
 from app.services.financial_sync import get_financial_df
 
 logger = logging.getLogger(__name__)
@@ -294,7 +300,12 @@ async def analyze_stock_stream(
 
     # 2. 价位计算(基于 K 线)
     levels = compute_levels(df)
-    close = float(df.tail(1)["close"][0]) if "close" in df.columns else None
+    close_value = df.tail(1)["close"][0] if "close" in df.columns else None
+    close = (
+        float(close_value)
+        if close_value is not None and math.isfinite(float(close_value))
+        else None
+    )
 
     # 3. 财务(辅助)
     fins = _load_financials(data_dir, symbol)
@@ -306,6 +317,8 @@ async def analyze_stock_stream(
         "summary": summarize_levels(levels, close),
         "levels": levels,
         "close": close,
+        "price_basis": level_price_basis(df),
+        "data_quality": level_data_quality(df).to_dict(),
     }, ensure_ascii=False)
 
     # 5+6. 构建提示词 + 流式调用 LLM(整体 try-except,任何异常都 yield error,避免前端卡死)

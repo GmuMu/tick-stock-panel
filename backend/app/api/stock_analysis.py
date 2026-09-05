@@ -20,7 +20,13 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.indicators.levels import compute_levels, summarize_levels
+from app.indicators.levels import (
+    LEVEL_PRICE_BASIS_CANONICAL,
+    compute_levels,
+    level_data_quality,
+    level_price_basis,
+    summarize_levels,
+)
 from app.services import stock_reports
 from app.services.stock_analyzer import analyze_stock_stream
 
@@ -128,10 +134,17 @@ def get_levels(
                            "boll": [], "keltner_s": [], "keltner_m": [], "keltner_l": [],
                            "atr_stop": [], "gap": [], "fib": [], "round": []},
                 "close": None, "summary": "无数据", "symbol": symbol,
-                "dates": [], "series": {}}
+                "dates": [], "series": {},
+                "price_basis": LEVEL_PRICE_BASIS_CANONICAL,
+                "data_quality": level_data_quality(df).to_dict()}
 
     levels = compute_levels(df)
-    close = float(df.tail(1)["close"][0]) if "close" in df.columns else None
+    close_value = df.tail(1)["close"][0] if "close" in df.columns else None
+    close = (
+        float(close_value)
+        if close_value is not None and math.isfinite(float(close_value))
+        else None
+    )
     # 日期 + 带状曲线序列(供前端画 Keltner/ATR/布林带曲线)
     dates = df["date"].to_list()
     series = _build_series(df)
@@ -142,6 +155,8 @@ def get_levels(
         "symbol": symbol,
         "dates": [str(d) for d in dates],
         "series": series,
+        "price_basis": level_price_basis(df),
+        "data_quality": level_data_quality(df).to_dict(),
     }
 
 

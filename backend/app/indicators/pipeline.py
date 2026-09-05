@@ -29,6 +29,14 @@ from app.enriched_generation import (
     EnrichedPublication,
     enriched_publication_incomplete,
 )
+from app.indicators.spec import (
+    ALL_INDICATOR_COLUMNS,
+    INDICATOR_DEPENDENCIES,
+    resolve_needed,
+)
+from app.indicators.spec import (
+    INDICATOR_COLUMNS as SPEC_INDICATOR_COLUMNS,
+)
 from app.market_time import cn_today
 from app.parquet import scan_daily_parquet, scan_enriched_parquet, scan_parquet_compat
 from app.price_limits import (
@@ -314,52 +322,16 @@ def _apply_adj_factor(raw: pl.DataFrame, factors: pl.DataFrame) -> pl.DataFrame:
 
 # ── compute_indicators 的列依赖关系 (供 needed 裁剪时求闭包) ────────────
 # target -> 其计算所依赖的中间/指标列 (仅列出依赖非原始 OHLCV 的项)
-_INDICATOR_DEPS: dict[str, set[str]] = {
-    "macd_dif": {"_ema12", "_ema26"},
-    "boll_upper": {"ma20", "_boll_std"},
-    "boll_lower": {"ma20", "_boll_std"},
-    "macd_dea": {"macd_dif"},
-    "macd_hist": {"macd_dif", "macd_dea"},
-    "kdj_k": {"_kdj_ln", "_kdj_hn"},
-    "kdj_d": {"kdj_k"},
-    "kdj_j": {"kdj_k", "kdj_d"},
-    "atr_14": {"_tr"},
-    "vol_ratio_5d": {"_vol_ma5"},
-    "annual_vol_20d": {"_daily_pct"},
-    "rsi_6": {"_delta", "_gain", "_loss"},
-    "rsi_14": {"_delta", "_gain", "_loss"},
-    "rsi_24": {"_delta", "_gain", "_loss"},
+_INDICATOR_DEPS = {
+    name: set(dependencies)
+    for name, dependencies in INDICATOR_DEPENDENCIES.items()
 }
-
-# compute_indicators 可产出的全部指标/临时列 (needed=None 时即为此全集, 行为不变)
-_ALL_INDICATOR_COLS: frozenset[str] = frozenset({
-    "prev_close", "ma5", "ma10", "ma20", "ma30", "ma60",
-    "ema5", "ema10", "ema20", "ema30", "ema60", "_ema12", "_ema26",
-    "_boll_std", "_kdj_ln", "_kdj_hn", "_tr", "vol_ma5", "vol_ma10",
-    "_vol_ma5", "high_60d", "low_60d",
-    "macd_dif", "boll_upper", "boll_lower", "macd_dea", "macd_hist",
-    "kdj_k", "kdj_d", "kdj_j",
-    "atr_14", "vol_ratio_5d",
-    "momentum_5d", "momentum_10d", "momentum_20d", "momentum_30d", "momentum_60d",
-    "change_pct", "change_amount", "amplitude", "_daily_pct", "annual_vol_20d",
-    "rsi_6", "rsi_14", "rsi_24",
-})
+_ALL_INDICATOR_COLS = ALL_INDICATOR_COLUMNS
 
 
 def _resolve_needed(needed: set[str] | None) -> set[str]:
     """把 needed 展开为闭包 (含所依赖的中间列)。needed=None → 全集。"""
-    if needed is None:
-        return set(_ALL_INDICATOR_COLS)
-    want = set(needed)
-    changed = True
-    while changed:
-        changed = False
-        for target in list(want):
-            deps = _INDICATOR_DEPS.get(target)
-            if deps and not deps <= want:
-                want |= deps
-                changed = True
-    return want
+    return resolve_needed(needed)
 
 
 def compute_indicators(
@@ -600,9 +572,7 @@ LIMIT_SIGNAL_OUTPUTS: frozenset[str] = frozenset({
     "turnover_rate",
 })
 
-INDICATOR_COLUMNS: frozenset[str] = frozenset(
-    col for col in _ALL_INDICATOR_COLS if not col.startswith("_")
-)
+INDICATOR_COLUMNS: frozenset[str] = SPEC_INDICATOR_COLUMNS
 
 
 def get_signal_dependencies() -> dict[str, frozenset[str]]:
@@ -1904,7 +1874,11 @@ def compute_enriched_today(
     boll_sq_sum = pl.col("_boll_partial_sq_sum") + pl.col("close") ** 2
     boll_ma = boll_sum / 20
     boll_var = boll_sq_sum / 20 - boll_ma ** 2
-    boll_std = pl.when(boll_var > 0).then(boll_var.sqrt()).otherwise(0.0)
+    boll_std = (
+        pl.when(boll_var > 0)
+        .then((boll_var * 20 / 19).sqrt())
+        .otherwise(0.0)
+    )
     df = df.with_columns([
         (boll_ma + 2 * boll_std).alias("boll_upper"),
         (boll_ma - 2 * boll_std).alias("boll_lower"),
@@ -1968,11 +1942,11 @@ def compute_enriched_today(
     # ---- 极值 60 日 ----
     df = df.with_columns([
         pl.when(has_history_state)
-          .then(pl.max_horizontal(pl.col("_high_59d"), pl.col("high")))
+          .then(pl.max_horizontal(pl.col("_high_59d"), pl.col("close")))
           .otherwise(None)
           .alias("high_60d"),
         pl.when(has_history_state)
-          .then(pl.min_horizontal(pl.col("_low_59d"), pl.col("low")))
+          .then(pl.min_horizontal(pl.col("_low_59d"), pl.col("close")))
           .otherwise(None)
           .alias("low_60d"),
     ])
@@ -2001,7 +1975,7 @@ def compute_enriched_today(
     vol_var = total_sq_sum / 20 - vol_mean ** 2
     df = df.with_columns(
         pl.when(has_history_state & (vol_var > 0))
-          .then(vol_var.sqrt() * (252 ** 0.5))
+          .then((vol_var * 20 / 19).sqrt() * (252 ** 0.5))
           .otherwise(None)
           .alias("annual_vol_20d"),
     )

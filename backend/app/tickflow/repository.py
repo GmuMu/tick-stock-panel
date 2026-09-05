@@ -761,8 +761,15 @@ class KlineRepository:
         # 优先使用已有的历史缓存 (避免重复 scan_parquet + compute_indicators)
         if self._enriched_history_cache is not None and not self._enriched_history_cache.is_empty():
             hist_all = self._enriched_history_cache
-            if "date" in hist_all.columns and hist_all["date"].min() <= start_60d:
-                # 从历史缓存中提取所需列 (历史缓存已有指标列)
+            cache_min = (
+                self._enriched_history_start
+                or hist_all["date"].min()
+                if "date" in hist_all.columns
+                else None
+            )
+            if cache_min is not None and cache_min <= latest:
+                # 递推状态(EMA/RSI)必须使用缓存中的全部历史,否则截断后会重新播种,
+                # 与 batch 计算产生可累积的微小偏差。窗口聚合仍只消费尾部窗口。
                 base_cols = [
                     "symbol", "date", "open", "high", "low", "close", "volume",
                     "raw_close", "raw_high", "raw_low",
@@ -772,7 +779,7 @@ class KlineRepository:
                 step = time.perf_counter()
                 logger.info("live agg step start: slice history cache")
                 df_hist = hist_all.filter(
-                    (pl.col("date") >= start_60d) & (pl.col("date") <= latest)
+                    (pl.col("date") >= cache_min) & (pl.col("date") <= latest)
                 ).select(needed).sort(["symbol", "date"])
                 logger.info("live agg step done: slice history cache rows=%d (%.2fs)", len(df_hist), time.perf_counter() - step)
 
@@ -923,8 +930,8 @@ class KlineRepository:
                 pl.col("close").tail(19).sum().alias("_boll_partial_sum"),
                 (pl.col("close").tail(19) ** 2).sum().alias("_boll_partial_sq_sum"),
 
-                pl.col("high").tail(59).max().alias("_high_59d"),
-                pl.col("low").tail(59).min().alias("_low_59d"),
+                pl.col("close").tail(59).max().alias("_high_59d"),
+                pl.col("close").tail(59).min().alias("_low_59d"),
 
                 # 异动偏离 deviate_3d 用 (与 5d/10d/30d 同语义: 尾部第 N 个收盘)
                 pl.col("close").tail(3).first().alias("_close_3d_ago"),

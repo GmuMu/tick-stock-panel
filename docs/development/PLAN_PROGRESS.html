@@ -176,7 +176,7 @@
     <div id="empty" class="empty">没有匹配的任务。可以换一个关键词或筛选条件。</div>
 
     <footer class="footer">
-      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；下一步回到 <code>TASK-0301</code>。
+      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；下一步进入 Phase 4 <code>TASK-0401</code>。
     </footer>
   </main>
 
@@ -198,10 +198,10 @@
       ["Phase 2", "外部数据源与 Provider 治理", "TASK-0204", "Cross-Provider Golden", "done", "用跨 Provider fixture 验证字段、单位、复权和报告期口径。", "docs/data/DATA_GOLDEN_BASELINE.md; backend/tests/test_provider_golden.py", "已完成：固定 fixture 覆盖日K、分钟、实时、除权和财务报告期；132 个相关回归通过。", "test/0204-provider-golden"],
       ["Phase 2", "外部数据源与 Provider 治理", "TASK-0205", "Sequoia-X Strategies", "done", "接入 Sequoia-X 中可由日线 OHLCV 表达的 6 个选股策略。", "backend/app/strategy/builtin/sequoia_*.py; backend/tests/test_sequoia_x_strategies.py; docs/tasks/TASK-0205-sequoia-x-strategies.md", "已完成：6 个策略进入 matrix_native；PrivatePlacement 因公司行为数据缺口暂不实现。", "feat/sequoia-x-strategies"],
 
-      ["Phase 3", "指标规范与增量一致性", "TASK-0301", "IndicatorSpec", "partial", "把指标定义、依赖列、窗口和版本变成可验证规范。", "backend/app/indicators/pipeline.py::compute_all", "抽出版本化 IndicatorSpec，不复制 pipeline。", "feat/0301-indicator-spec"],
-      ["Phase 3", "指标规范与增量一致性", "TASK-0302", "Indicator Golden Tests", "partial", "建立指标数值、列集合和边界输入的 golden 测试。", "tests/test_enriched_* 与指标相关测试", "增加 golden 值和列级契约。", "test/0302-indicator-golden"],
-      ["Phase 3", "指标规范与增量一致性", "TASK-0303", "Price Level", "partial", "统一关键价位、复权价格和缺失质量状态。", "backend/app/indicators/levels.py; stock_analyzer.py", "对齐价格和复权口径。", "feat/0303-price-level"],
-      ["Phase 3", "指标规范与增量一致性", "TASK-0304", "Incremental Parity", "partial", "证明盘后 batch 与盘中 incremental 的指标结果一致。", "compute_enriched_today 与 enriched 增量测试", "用同一 IndicatorSpec 补 parity 测试。", "test/0304-incremental-parity"],
+      ["Phase 3", "指标规范与增量一致性", "TASK-0301", "IndicatorSpec", "done", "把指标定义、依赖列、窗口和版本变成可验证规范。", "backend/app/indicators/spec.py; backend/app/indicators/pipeline.py; backend/tests/test_indicator_spec.py; docs/tasks/TASK-0301-indicator-spec.md", "已完成：版本化不可变 IndicatorSpec、完整依赖闭包和无环校验已落地；52 个相关回归通过。", "feat/0301-indicator-spec"],
+      ["Phase 3", "指标规范与增量一致性", "TASK-0302", "Indicator Golden Tests", "done", "建立指标数值、列集合和边界输入的 golden 测试。", "backend/tests/fixtures/indicator_golden/indicators.json; backend/tests/test_indicator_golden.py; docs/tasks/TASK-0302-indicator-golden.md", "已完成：固定 70 根离线输入、全部公开指标列和最新值；55 个相关回归通过。", "feat/0301-indicator-spec"],
+      ["Phase 3", "指标规范与增量一致性", "TASK-0303", "Price Level", "done", "统一关键价位、复权价格和缺失质量状态。", "backend/app/indicators/levels.py; backend/app/api/stock_analysis.py; backend/app/services/stock_analyzer.py; backend/tests/test_price_levels_contract.py; docs/tasks/TASK-0303-price-level.md", "已完成：明确 adjusted/canonical OHLC、统一 DataQuality，并在 levels/AI meta 暴露 provenance；28 个相关回归通过。", "feat/0301-indicator-spec"],
+      ["Phase 3", "指标规范与增量一致性", "TASK-0304", "Incremental Parity", "done", "证明盘后 batch 与盘中 incremental 的指标结果一致。", "backend/app/indicators/pipeline.py; backend/app/tickflow/repository.py; backend/tests/test_indicator_incremental_parity.py; docs/tasks/TASK-0304-incremental-parity.md", "已完成：修正递推状态截断、样本方差和 close 极值口径；31 个相关回归通过。", "feat/0301-indicator-spec"],
 
       ["Phase 4", "策略合同与 EOD 执行", "TASK-0401", "Strategy Contract", "partial", "统一策略元数据、输入、输出、版本、生命周期和来源。", "backend/app/strategy/engine.py::StrategyDef", "补 lifecycle、version、provenance，不破坏注册表。", "feat/0401-strategy-contract"],
       ["Phase 4", "策略合同与 EOD 执行", "TASK-0402", "Candidate Model", "partial", "统一策略候选、评分、来源和后续复测引用。", "StrategyResult; backtest/candidates.py", "统一候选模型与来源字段。", "feat/0402-candidate-model"],
@@ -334,7 +334,7 @@
       document.getElementById("percent").textContent = `${percent.toFixed(1)}%`;
       document.querySelector(".ring").style.setProperty("--progress", `${percent}%`);
       document.getElementById("summary-title").textContent = `${counts.done}/${tasks.length} 个任务已完成`;
-      document.getElementById("summary-text").textContent = `当前阶段：TASK-0301 · IndicatorSpec。Sequoia-X 已完成 6 个日线策略接入；部分完成项表示已有基础但还没有达到计划验收边界。`;
+      document.getElementById("summary-text").textContent = `当前阶段：TASK-0401 · Strategy Contract。TASK-0301 至 TASK-0304 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
     }
 
     document.querySelectorAll("[data-filter]").forEach(button => {

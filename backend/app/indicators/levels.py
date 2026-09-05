@@ -13,9 +13,12 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 import polars as pl
+
+from app.data_quality import DataQuality
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,71 @@ LEVEL_TYPES = {
     "fib": "斐波那契",        # 回撤位 0.236~0.786
     "round": "整数关口",      # 心理整数位
 }
+
+LEVEL_INPUT_COLUMNS = frozenset({"high", "low", "close"})
+RAW_PRICE_COLUMNS = frozenset({"raw_high", "raw_low", "raw_close"})
+LEVEL_PRICE_BASIS_ADJUSTED = "adjusted_ohlc"
+LEVEL_PRICE_BASIS_CANONICAL = "canonical_ohlc"
+
+
+def level_price_basis(df: pl.DataFrame) -> str:
+    """Return the price basis consumed by the level calculations.
+
+    Enriched stock data contains adjusted OHLC in ``open/high/low/close`` and
+    preserves unadjusted values in ``raw_*`` columns. Level calculations
+    intentionally use the adjusted columns so historical levels stay
+    comparable across corporate actions.
+    """
+    if set(df.columns) >= RAW_PRICE_COLUMNS:
+        return LEVEL_PRICE_BASIS_ADJUSTED
+    return LEVEL_PRICE_BASIS_CANONICAL
+
+
+def level_data_quality(df: pl.DataFrame) -> DataQuality:
+    """Assess completeness of the OHLC fields required for price levels."""
+    if df.is_empty():
+        return DataQuality(
+            dataset="price_levels",
+            status="MISSING",
+            coverage_ratio=0.0,
+            expected_rows=None,
+            actual_rows=0,
+            observed_at=None,
+            age_seconds=None,
+            stale_after_seconds=None,
+            reason="no_rows",
+            usable=False,
+        )
+
+    missing = LEVEL_INPUT_COLUMNS - set(df.columns)
+    if missing:
+        return DataQuality(
+            dataset="price_levels",
+            status="INVALID",
+            coverage_ratio=None,
+            expected_rows=df.height,
+            actual_rows=0,
+            observed_at=None,
+            age_seconds=None,
+            stale_after_seconds=None,
+            reason=f"missing_columns:{','.join(sorted(missing))}",
+            usable=False,
+        )
+
+    valid_rows = 0
+    for row in df.select(sorted(LEVEL_INPUT_COLUMNS)).iter_rows():
+        try:
+            values = [float(value) for value in row]
+        except (TypeError, ValueError):
+            continue
+        if all(math.isfinite(value) for value in values):
+            valid_rows += 1
+    return DataQuality.from_counts(
+        "price_levels",
+        expected_rows=df.height,
+        actual_rows=valid_rows,
+        partial_floor=1.0,
+    )
 
 
 # ================================================================
@@ -570,7 +638,8 @@ def compute_levels(df: pl.DataFrame) -> dict[str, list[dict]]:
     keltner_s / keltner_m / keltner_l / atr_stop / gap / fib / round),
     前端按 key 渲染开关按钮,逐组显隐。
     """
-    if df.is_empty():
+    quality = level_data_quality(df)
+    if not quality.usable:
         return {k: [] for k in LEVEL_TYPES}
 
     try:
