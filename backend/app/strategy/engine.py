@@ -20,6 +20,12 @@ from typing import Any
 import numpy as np
 import polars as pl
 
+from app.strategy.contract import (
+    StrategyContract,
+    contract_for_strategy,
+    execution_provenance,
+    normalize_contract,
+)
 from app.strategy.scoring import (
     SCORING_DIRECTION_LOW,
     effective_scoring,
@@ -28,6 +34,12 @@ from app.strategy.scoring import (
     scoring_dependencies,
     scoring_value_expr,
     scoring_warmup_bars,
+)
+from app.strategy.contract import (
+    StrategyContract,
+    contract_for_strategy,
+    execution_provenance,
+    normalize_contract,
 )
 
 logger = logging.getLogger(__name__)
@@ -207,6 +219,9 @@ class StrategyDef:
     # 仅 minute_filter: META["daily_history_bars"] 声明需要的日线历史窗口 (0=不需要;
     # >0 时 filter_minute_history 必须接受 daily 关键字, 引擎注入 context.daily_history)
     minute_daily_bars: int = 0
+    # Loaded strategies have a normalized contract; manually constructed test
+    # definitions may leave this unset and use contract_for_strategy fallback.
+    contract: StrategyContract | None = None
 
 
 @dataclass
@@ -220,6 +235,9 @@ class StrategyResult:
     scores: dict[str, float] = field(default_factory=dict)
     entry_signal_hits: list[dict] = field(default_factory=list)
     exit_signal_hits: list[dict] = field(default_factory=list)
+    contract_version: str = "1.0"
+    strategy_version: str = "1.0.0"
+    provenance: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -498,6 +516,10 @@ class StrategyEngine:
             )
 
         matrix_strategy = getattr(mod, "MATRIX_STRATEGY", None)
+        declared_required_features = (
+            frozenset(meta.get("required_features", []) or [])
+            | frozenset(getattr(mod, "REQUIRED_FEATURES", []) or [])
+        )
         composite_spec: CompositeSpec | None = None
         minute_daily_bars = 0
         if execution_backend == "matrix_native":
@@ -561,6 +583,38 @@ class StrategyEngine:
         elif filter_history_fn is None or filter_fn is not None:
             raise ValueError("python_history_legacy strategy must declare only filter_history")
 
+        lookback_days = int(getattr(mod, "LOOKBACK_DAYS", meta.get("lookback_days", 1)) or 1)
+        contract_features = set(declared_required_features)
+        if matrix_strategy is not None:
+            contract_features.update(
+                str(field_name) for field_name in matrix_strategy.required_fields()
+            )
+        warmup_bars = max(
+            1,
+            int(meta.get("warmup_bars", lookback_days) or lookback_days),
+            scoring_warmup_bars(meta.get("scoring", {})),
+        )
+        if matrix_strategy is not None:
+            try:
+                warmup_bars = max(
+                    warmup_bars,
+                    int(matrix_strategy.required_warmup_bars({})),
+                )
+            except (AttributeError, TypeError, ValueError):
+                # A strategy may require runtime parameters to determine its
+                # exact warmup. Keep the declared/static contract in that case.
+                logger.debug("strategy warmup requires runtime params: %s", path)
+        meta, contract = normalize_contract(
+            meta,
+            source=source,
+            execution_backend=execution_backend,
+            required_features=contract_features,
+            entry_signals=getattr(mod, "ENTRY_SIGNALS", []),
+            exit_signals=getattr(mod, "EXIT_SIGNALS", []),
+            lookback_days=lookback_days,
+            warmup_bars=warmup_bars,
+        )
+
         return StrategyDef(
             meta=meta,
             basic_filter=bf,
@@ -573,9 +627,8 @@ class StrategyEngine:
             max_hold_days=getattr(mod, "MAX_HOLD_DAYS", None),
             filter_fn=filter_fn,
             filter_history_fn=filter_history_fn,
-            required_features=frozenset(meta.get("required_features", []) or [])
-            | frozenset(getattr(mod, "REQUIRED_FEATURES", []) or []),
-            lookback_days=int(getattr(mod, "LOOKBACK_DAYS", meta.get("lookback_days", 1)) or 1),
+            required_features=declared_required_features,
+            lookback_days=lookback_days,
             source=source,
             file_path=path,
             execution_backend=execution_backend,
@@ -583,6 +636,7 @@ class StrategyEngine:
             composite=composite_spec,
             filter_minute_history_fn=filter_minute_history_fn,
             minute_daily_bars=minute_daily_bars,
+            contract=contract,
         )
 
     def reload(self) -> None:
@@ -605,11 +659,24 @@ class StrategyEngine:
         for s in self._strategies.values():
             if s.meta.get("research_only") and not include_research:
                 continue
-            result.append({
+            contract = contract_for_strategy(s)
+            item = {
                 **s.meta,
                 "source": s.source,
                 "execution_backend": s.execution_backend,
-            })
+                "contract_version": contract.contract_version,
+                "version": contract.strategy_version,
+                "lifecycle": contract.lifecycle,
+                "asset_types": list(contract.asset_types),
+                "timeframes": list(contract.timeframes),
+                "required_features": list(contract.required_features),
+                "entry_signals": list(contract.entry_signals),
+                "exit_signals": list(contract.exit_signals),
+                "lookback_days": contract.lookback_days,
+                "warmup_bars": contract.warmup_bars,
+                "provenance": dict(contract.provenance),
+            }
+            result.append(item)
         return result
 
     def strategy_definitions(self) -> tuple[StrategyDef, ...]:
@@ -873,6 +940,29 @@ class StrategyEngine:
     # ================================================================
 
     def run(
+        self,
+        strategy_id: str,
+        context: StrategyDataContext,
+        pool: list[str] | None = None,
+        params: dict | None = None,
+        overrides: dict | None = None,
+    ) -> StrategyResult:
+        """Execute a strategy and attach the normalized contract provenance."""
+        strategy = self.get(strategy_id)
+        result = self._run(
+            strategy_id,
+            context,
+            pool=pool,
+            params=params,
+            overrides=overrides,
+        )
+        contract = contract_for_strategy(strategy)
+        result.contract_version = contract.contract_version
+        result.strategy_version = contract.strategy_version
+        result.provenance = execution_provenance(strategy, context, result.as_of)
+        return result
+
+    def _run(
         self,
         strategy_id: str,
         context: StrategyDataContext,

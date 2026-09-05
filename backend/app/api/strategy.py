@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from app.backtest.minute_trigger import MINUTE_EXIT_TRIGGER_SIGNALS
 from app.strategy import config as strategy_config
 from app.strategy.ai_generator import AIStrategyGenerator, find_meta_assignment
+from app.strategy.contract import contract_for_strategy
 from app.strategy.engine import StrategyDef, StrategyEngine
 from app.strategy.monitor import StrategyMonitorService
 from app.strategy.prompt_builder import build_step1, build_step2
@@ -181,6 +182,7 @@ def _strategy_detail(
     # 名称/描述可被用户覆盖
     name = overrides.get("name", s.meta.get("name", "")) if overrides else s.meta.get("name", "")
     description = overrides.get("description", s.meta.get("description", "")) if overrides else s.meta.get("description", "")
+    contract = contract_for_strategy(s)
 
     return {
         "id": s.meta["id"],
@@ -189,9 +191,15 @@ def _strategy_detail(
         "tags": s.meta.get("tags", []),
         "source": s.source,
         "execution_backend": s.execution_backend,
-        "asset_types": s.meta.get("asset_types", ["stock"]),
-        "timeframes": s.meta.get("timeframes", ["1d"]),
-        "version": s.meta.get("version", "1.0.0"),
+        "contract_version": contract.contract_version,
+        "asset_types": list(contract.asset_types),
+        "timeframes": list(contract.timeframes),
+        "version": contract.strategy_version,
+        "lifecycle": contract.lifecycle,
+        "required_features": list(contract.required_features),
+        "lookback_days": contract.lookback_days,
+        "warmup_bars": contract.warmup_bars,
+        "provenance": dict(contract.provenance),
         "basic_filter": bf,
         "params": s.meta.get("params", []),
         "params_defaults": params_defaults,

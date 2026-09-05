@@ -176,7 +176,7 @@
     <div id="empty" class="empty">没有匹配的任务。可以换一个关键词或筛选条件。</div>
 
     <footer class="footer">
-      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；下一步进入 Phase 4 <code>TASK-0401</code>。
+      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；<code>TASK-0401</code> 已完成，下一步进入 <code>TASK-0402</code>。
     </footer>
   </main>
 
@@ -203,7 +203,7 @@
       ["Phase 3", "指标规范与增量一致性", "TASK-0303", "Price Level", "done", "统一关键价位、复权价格和缺失质量状态。", "backend/app/indicators/levels.py; backend/app/api/stock_analysis.py; backend/app/services/stock_analyzer.py; backend/tests/test_price_levels_contract.py; docs/tasks/TASK-0303-price-level.md", "已完成：明确 adjusted/canonical OHLC、统一 DataQuality，并在 levels/AI meta 暴露 provenance；28 个相关回归通过。", "feat/0301-indicator-spec"],
       ["Phase 3", "指标规范与增量一致性", "TASK-0304", "Incremental Parity", "done", "证明盘后 batch 与盘中 incremental 的指标结果一致。", "backend/app/indicators/pipeline.py; backend/app/tickflow/repository.py; backend/tests/test_indicator_incremental_parity.py; docs/tasks/TASK-0304-incremental-parity.md", "已完成：修正递推状态截断、样本方差和 close 极值口径；31 个相关回归通过。", "feat/0301-indicator-spec"],
 
-      ["Phase 4", "策略合同与 EOD 执行", "TASK-0401", "Strategy Contract", "partial", "统一策略元数据、输入、输出、版本、生命周期和来源。", "backend/app/strategy/engine.py::StrategyDef", "补 lifecycle、version、provenance，不破坏注册表。", "feat/0401-strategy-contract"],
+      ["Phase 4", "策略合同与 EOD 执行", "TASK-0401", "Strategy Contract", "done", "统一策略元数据、输入、输出、版本、生命周期和来源。", "backend/app/strategy/contract.py; backend/app/strategy/engine.py::StrategyDef; backend/tests/test_strategy_contract.py; docs/tasks/TASK-0401-strategy-contract.md", "已完成：普通、矩阵、分钟、叠加策略统一合同；结果携带可序列化 provenance；52 个相关回归通过。", "feat/0401-strategy-contract"],
       ["Phase 4", "策略合同与 EOD 执行", "TASK-0402", "Candidate Model", "partial", "统一策略候选、评分、来源和后续复测引用。", "StrategyResult; backtest/candidates.py", "统一候选模型与来源字段。", "feat/0402-candidate-model"],
       ["Phase 4", "策略合同与 EOD 执行", "TASK-0403", "EOD Seeds", "partial", "定义每日策略种子、日期、输入快照和数据质量。", "strategy_cache.py; daily_pipeline.py", "明确 seed 输入、日期和 provenance。", "feat/0403-eod-seeds"],
       ["Phase 4", "策略合同与 EOD 执行", "TASK-0404", "EOD Runner", "partial", "编排盘后数据、指标、策略和候选的执行任务。", "jobs/daily_pipeline.py; api/pipeline.py", "补任务状态与 provenance，不直接编排供应商。", "feat/0404-eod-runner"],
@@ -334,7 +334,7 @@
       document.getElementById("percent").textContent = `${percent.toFixed(1)}%`;
       document.querySelector(".ring").style.setProperty("--progress", `${percent}%`);
       document.getElementById("summary-title").textContent = `${counts.done}/${tasks.length} 个任务已完成`;
-      document.getElementById("summary-text").textContent = `当前阶段：TASK-0401 · Strategy Contract。TASK-0301 至 TASK-0304 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
+      document.getElementById("summary-text").textContent = `当前阶段：TASK-0402 · Candidate Model。TASK-0401 已完成；TASK-0301 至 TASK-0304 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
     }
 
     document.querySelectorAll("[data-filter]").forEach(button => {

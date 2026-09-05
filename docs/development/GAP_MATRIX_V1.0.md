@@ -55,7 +55,7 @@
 
 | Task | 状态 | 真实证据 / 入口 | 下一步 |
 | --- | --- | --- | --- |
-| TASK-0401 | PARTIAL | `StrategyEngine`、`StrategyDef`、`StrategyDataContext` 已存在，支持普通、矩阵、分钟、叠加策略 | 补计划要求的版本/lifecycle/provenance，不破坏当前注册表 |
+| TASK-0401 | DONE | `strategy/contract.py` 提供版本化 `StrategyContract`、生命周期、输入特征和执行 provenance；`StrategyEngine` 与策略 API 已统一接入；`tests/test_strategy_contract.py` 覆盖普通、矩阵、分钟、叠加和 reload 隔离 | 进入 `TASK-0402`，统一候选模型与来源字段 |
 | TASK-0402 | PARTIAL | `StrategyResult`、`backtest.candidates`、研究候选 API 已存在 | 统一候选模型与来源字段 |
 | TASK-0403 | PARTIAL | `strategy_cache`、策略结果和候选库已存在；缺少计划定义的 EOD seed 契约 | 明确 seed 输入、日期和数据质量 |
 | TASK-0404 | PARTIAL | `jobs.daily_pipeline`、`pipeline` API、调度器已存在 | EOD runner 只编排标准服务，补任务状态与 provenance |
@@ -157,7 +157,7 @@
 
 ## 执行结论
 
-1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0205`、`TASK-0301` 至 `TASK-0304` 已完成，当前分支为 `feat/0301-indicator-spec`；下一步进入 Phase 4 `TASK-0401`，Sequoia-X 的 `PrivatePlacement` 因公司行为数据缺口暂不实现。
+1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0205`、`TASK-0301` 至 `TASK-0304` 和 `TASK-0401` 已完成，当前分支为 `feat/0301-indicator-spec`；下一步进入 Phase 4 `TASK-0402`，Sequoia-X 的 `PrivatePlacement` 因公司行为数据缺口暂不实现。
 2. `full_minute` YAML 解析断点仍是已确认缺口，依赖它的自定义全量分钟任务不得宣称端到端完成。
 3. 交易、OMS、QMT 和实盘相关任务全部保持 `GAP/BLOCKED`，在没有风险、幂等、审计和 Kill Switch 之前不接真实交易。
 4. 以后每个 Task 必须先补契约测试，再实现代码；完成后更新对应 `docs/tasks/TASK-xxxx-*.md`，不以“页面能打开”代替验收。
