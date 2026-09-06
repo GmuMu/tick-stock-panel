@@ -136,6 +136,14 @@ export const QK = {
   paperPositions: ['paper-positions'] as const,
   paperOutbox: ['paper-outbox'] as const,
   paperReviews: ['paper-reviews'] as const,
+
+  // Phase 11 Broker/QMT safety boundary
+  brokerStatus: ['broker-status'] as const,
+  brokerOrders: ['broker-orders'] as const,
+  brokerFills: ['broker-fills'] as const,
+  brokerAccount: ['broker-account'] as const,
+  brokerQuote: (symbol: string) => ['broker-quote', symbol] as const,
+  brokerReconcile: ['broker-reconcile'] as const,
 } as const
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====

@@ -1066,6 +1066,92 @@ export interface PaperSummary {
   reviews: number
 }
 
+export interface BrokerSafetyState {
+  kill_switch: boolean
+  mode: 'HUMAN_CONFIRM' | 'LIVE_SHADOW' | 'AUTO' | string
+  real_order_enabled: boolean
+  reason?: string | null
+  updated_at: string
+}
+
+export interface BrokerStatus {
+  adapter: string
+  connection: 'disconnected' | 'connecting' | 'connected' | 'degraded' | 'blocked' | string
+  mode: 'HUMAN_CONFIRM' | 'LIVE_SHADOW' | 'AUTO' | string
+  agent: { pid: number; transport: string; vendor_sdk_loaded: boolean; isolated: boolean }
+  sdk_configured: boolean
+  network_enabled: boolean
+  real_order_enabled: boolean
+  kill_switch: boolean
+  safety: BrokerSafetyState
+  last_error?: string | null
+  contract_version: string
+  updated_at: string
+}
+
+export interface BrokerQuote {
+  symbol: string
+  last_price: number | null
+  bid_price: number | null
+  ask_price: number | null
+  bid_quantity: number | null
+  ask_quantity: number | null
+  as_of: string
+  quality: 'FRESH' | 'STALE' | 'UNAVAILABLE' | 'INVALID' | string
+  provenance: Record<string, unknown>
+  reason?: string | null
+}
+
+export interface BrokerOrder {
+  id: string
+  client_order_id: string
+  symbol: string
+  side: 'buy' | 'sell'
+  quantity: number
+  limit_price: number
+  order_type: string
+  status: string
+  filled_quantity: number
+  avg_fill_price?: number | null
+  created_at: string
+  updated_at: string
+  provenance: Record<string, unknown>
+  reject_reason?: string | null
+}
+
+export interface BrokerFill {
+  id: string
+  order_id: string
+  client_order_id: string
+  symbol: string
+  side: 'buy' | 'sell'
+  quantity: number
+  price: number
+  trade_date: string
+  occurred_at: string
+  status: string
+  provenance: Record<string, unknown>
+}
+
+export interface BrokerAccount {
+  account_id: string
+  cash: number
+  equity: number
+  available_cash: number
+  as_of: string
+  quality: string
+  provenance: Record<string, unknown>
+  positions: { symbol: string; quantity: number; available_quantity: number; avg_cost: number }[]
+}
+
+export interface BrokerReconcileReport {
+  status: 'matched' | 'mismatched' | string
+  checked_at: string
+  mismatches: Record<string, unknown>[]
+  broker_snapshot: Record<string, unknown>
+  local_snapshot: Record<string, unknown>
+}
+
 export interface WatchScope {
   contract_version: string
   scope_version: string
@@ -2804,6 +2890,38 @@ export const api = {
   paperReviews: () => request<{ items: Record<string, unknown>[] }>('/api/paper-trading/reviews'),
   paperReviewCreate: (payload: { as_of: string; summary?: string; idempotency_key?: string }) =>
     request<{ item: Record<string, unknown> }>('/api/paper-trading/reviews', { method: 'POST', body: JSON.stringify(payload) }),
+
+  // Phase 11: Broker/QMT protocol boundary. QMT remains blocked; mock only.
+  brokerStatus: () => request<BrokerStatus>('/api/broker/status'),
+  brokerConnect: (payload: { adapter: 'mock' | 'qmt'; mode: 'HUMAN_CONFIRM' | 'LIVE_SHADOW' | 'AUTO' }) =>
+    request<BrokerStatus>('/api/broker/connect', { method: 'POST', body: JSON.stringify(payload) }),
+  brokerDisconnect: () => request<BrokerStatus>('/api/broker/disconnect', { method: 'POST' }),
+  brokerSetMode: (mode: BrokerStatus['mode']) =>
+    request<BrokerStatus>('/api/broker/mode', { method: 'POST', body: JSON.stringify({ mode }) }),
+  brokerSafetyKill: (reason: string) =>
+    request<BrokerStatus>('/api/broker/safety/kill', { method: 'POST', body: JSON.stringify({ reason }) }),
+  brokerSafetyReset: () => request<BrokerStatus>('/api/broker/safety/reset', { method: 'POST' }),
+  brokerQuote: (symbol: string) => request<BrokerQuote>(`/api/broker/quote?symbol=${encodeURIComponent(symbol)}`),
+  brokerQuoteSeed: (payload: { symbol: string; last_price: number }) =>
+    request<BrokerQuote>('/api/broker/quote/seed', { method: 'POST', body: JSON.stringify(payload) }),
+  brokerOrders: () => request<{ items: BrokerOrder[] }>('/api/broker/orders'),
+  brokerOrderSubmit: (payload: Omit<BrokerOrder, 'id' | 'status' | 'filled_quantity' | 'avg_fill_price' | 'created_at' | 'updated_at' | 'provenance'> & { human_confirmed?: boolean; confirmation_id?: string; metadata?: Record<string, unknown> }) =>
+    request<{ item: BrokerOrder }>('/api/broker/orders', { method: 'POST', body: JSON.stringify(payload) }),
+  brokerOrderCancel: (id: string) => request<{ item: BrokerOrder }>(`/api/broker/orders/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+  brokerFills: () => request<{ items: BrokerFill[] }>('/api/broker/fills'),
+  brokerFillSimulate: (id: string, payload: { quantity: number; price: number; trade_date?: string }) =>
+    request<{ item: BrokerFill }>(`/api/broker/orders/${encodeURIComponent(id)}/fills`, { method: 'POST', body: JSON.stringify(payload) }),
+  brokerAccount: () => request<BrokerAccount>('/api/broker/account'),
+  brokerReconcile: (local_snapshot?: Record<string, unknown>) =>
+    request<BrokerReconcileReport>('/api/broker/reconcile', { method: 'POST', body: JSON.stringify({ local_snapshot }) }),
+  brokerReconciliations: () => request<{ items: Record<string, unknown>[] }>('/api/broker/reconciliations'),
+  brokerConfirmations: () => request<{ items: Record<string, unknown>[] }>('/api/broker/confirmations'),
+  brokerConfirmationRequest: (payload: { action: string; payload: Record<string, unknown>; ttl_seconds?: number }) =>
+    request<Record<string, unknown>>('/api/broker/confirmations', { method: 'POST', body: JSON.stringify(payload) }),
+  brokerConfirmationDecision: (id: string, status: 'approved' | 'rejected') =>
+    request<Record<string, unknown>>(`/api/broker/confirmations/${encodeURIComponent(id)}/decision`, { method: 'POST', body: JSON.stringify({ status }) }),
+  brokerLiveShadow: (payload: { client_order_id: string; symbol: string; side: 'buy' | 'sell'; quantity: number; limit_price: number; order_type: 'limit'; simulate_fill?: boolean }) =>
+    request<Record<string, unknown>>('/api/broker/live-shadow/run', { method: 'POST', body: JSON.stringify(payload) }),
 
   limitLadder: (asOf?: string, extColumns?: string, direction?: 'up' | 'down') => {
     const params = new URLSearchParams()

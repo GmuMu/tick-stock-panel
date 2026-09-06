@@ -176,7 +176,7 @@
     <div id="empty" class="empty">没有匹配的任务。可以换一个关键词或筛选条件。</div>
 
     <footer class="footer">
-      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；Phase 9/10 已完成，下一步进入 <code>TASK-1101</code>，当前不接真实券商。
+      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；Phase 9/10/11 的 paper、mock 和隔离 Agent 契约已完成，真实 QMT SDK、网络行情和实盘下单仍关闭。
     </footer>
   </main>
 
@@ -241,17 +241,17 @@
       ["Phase 10", "Risk 与 OMS", "TASK-1004", "Idempotency / Outbox", "done", "保证重试、崩溃恢复和消息投递不重复。", "idempotency_keys; outbox_events; paper-trading/outbox", "已完成：唯一客户端订单号、同事务事件、pending/sent/failed、attempts 和错误记录。", "feat/0301-indicator-spec"],
       ["Phase 10", "Risk 与 OMS", "TASK-1005", "Position Projection", "done", "从已确认事件构建可审计的持仓投影。", "services/position_projection.py; positions; PaperTrading.tsx", "已完成：只消费 confirmed paper fill，独立维护数量、成本、盈亏和 T+1 可卖量。", "feat/0301-indicator-spec"],
 
-      ["Phase 11", "Broker 与 QMT", "TASK-1101", "Broker Protocol", "gap", "定义券商适配器、连接、订单和回报的最小协议。", "尚未发现 broker protocol。", "依赖 OMS，先实现 mock protocol。", "feat/1101-broker-protocol"],
-      ["Phase 11", "Broker 与 QMT", "TASK-1102", "QMT Agent Core", "gap", "把 QMT 运行隔离为独立 Agent 进程。", "尚未发现 QMT agent core。", "依赖 1101，Windows 集成隔离在 Agent。", "feat/1102-qmt-agent-core"],
-      ["Phase 11", "Broker 与 QMT", "TASK-1103", "QMT Quote", "gap", "接入 QMT 行情并带 quality/provenance。", "尚未发现 QMT quote adapter。", "依赖 1101/0104。", "feat/1103-qmt-quote"],
-      ["Phase 11", "Broker 与 QMT", "TASK-1104", "QMT Trade", "gap", "接入 QMT 下单、撤单和回报。", "尚未发现 QMT trade adapter。", "依赖 1102/1004，默认 HUMAN_CONFIRM/LIVE_SHADOW。", "feat/1104-qmt-trade"],
-      ["Phase 11", "Broker 与 QMT", "TASK-1105", "QMT Reconcile", "gap", "对账账户、订单、成交和持仓。", "尚未发现 reconcile 服务。", "依赖成交回报、持仓 projection 和账户快照。", "feat/1105-qmt-reconcile"],
-      ["Phase 11", "Broker 与 QMT", "TASK-1106", "QMT Safety / Kill Switch", "gap", "实现停止交易、断连、权限和异常状态安全门。", "尚未发现 QMT safety/kill switch。", "依赖 1102-1105，AUTO 默认关闭。", "feat/1106-qmt-safety"],
+      ["Phase 11", "Broker 与 QMT", "TASK-1101", "Broker Protocol", "done", "定义券商适配器、连接、订单和回报的最小协议。", "broker/protocol.py; broker/mock.py; tests/test_phase11_broker_boundary.py", "已完成 mock-safe 协议：连接、行情、订单、成交和账户快照均有统一结构；不接真实交易。", "feat/1101-broker-protocol"],
+      ["Phase 11", "Broker 与 QMT", "TASK-1102", "QMT Agent Core", "done", "把 QMT 运行隔离为独立 Agent 进程。", "broker/agent.py; broker/agent_process.py; broker/runtime.py", "已完成隔离 Agent Core 和 JSONL 进程边界；当前不加载 vendor SDK。", "feat/1102-qmt-agent-core"],
+      ["Phase 11", "Broker 与 QMT", "TASK-1103", "QMT Quote", "done", "接入 QMT 行情并带 quality/provenance。", "broker/adapters.py::QmtQuoteAdapter; /api/broker/quote", "已完成 mock quote adapter：FRESH/UNAVAILABLE 和 provenance 可审计；真实 QMT 行情保持 blocked。", "feat/1103-qmt-quote"],
+      ["Phase 11", "Broker 与 QMT", "TASK-1104", "QMT Trade", "done", "接入 QMT 下单、撤单和回报。", "broker/adapters.py::QmtTradeAdapter; /api/broker/orders; BrokerQmt.tsx", "已完成 HUMAN_CONFIRM/LIVE_SHADOW mock 交易边界；AUTO、未连接和 QMT 未配置均 fail-closed。", "feat/1104-qmt-trade"],
+      ["Phase 11", "Broker 与 QMT", "TASK-1105", "QMT Reconcile", "done", "对账账户、订单、成交和持仓。", "broker/reconcile.py; /api/broker/reconcile; broker_agent_events.jsonl", "已完成只读结构化对账：报告 missing/value drift，不修改 OMS 或持仓。", "feat/1105-qmt-reconcile"],
+      ["Phase 11", "Broker 与 QMT", "TASK-1106", "QMT Safety / Kill Switch", "done", "实现停止交易、断连、权限和异常状态安全门。", "broker/safety.py; /api/broker/safety/*; tests/test_phase11_broker_boundary.py", "已完成持久化 Kill Switch、模式控制和人工确认安全门；默认 HUMAN_CONFIRM，真实订单关闭。", "feat/1106-qmt-safety"],
 
-      ["Phase 12", "Reconcile、Human Confirm、Small Live", "TASK-1201", "Account Reconcile", "gap", "定期核对账户余额、持仓、订单和成交。", "尚未发现 account reconcile 领域模块。", "依赖 QMT reconcile。", "feat/1201-account-reconcile"],
-      ["Phase 12", "Reconcile、Human Confirm、Small Live", "TASK-1202", "Human Confirm", "gap", "为高风险动作建立人工确认、过期和审计机制。", "尚未发现 HUMAN_CONFIRM 审批模型。", "依赖 DecisionGate、OMS 和审计。", "feat/1202-human-confirm"],
-      ["Phase 12", "Reconcile、Human Confirm、Small Live", "TASK-1203", "Live Shadow", "gap", "在不真实下单的情况下验证完整交易链。", "尚未发现 LIVE_SHADOW 测试闭环。", "依赖 mock broker、reconcile、kill switch。", "test/1203-live-shadow"],
-      ["Phase 12", "Reconcile、Human Confirm、Small Live", "TASK-1204", "Small Live", "blocked", "在小额、人工确认和安全门下进行受控实盘。", "安全前置尚未完成，当前禁止自动交易。", "必须通过 1203 和 1106。", "release/1204-small-live"],
+      ["Phase 12", "Reconcile、Human Confirm、Small Live", "TASK-1201", "Account Reconcile", "done", "定期核对账户余额、持仓、订单和成交。", "services/account_reconcile.py; /api/broker/reconcile; /api/broker/reconciliations", "已完成本地 mock 对账历史：只读比较 matched/mismatched 和结构化漂移；真实账户快照仍待 QMT Agent。", "feat/1201-account-reconcile"],
+      ["Phase 12", "Reconcile、Human Confirm、Small Live", "TASK-1202", "Human Confirm", "done", "为高风险动作建立人工确认、过期和审计机制。", "services/human_confirm.py; /api/broker/confirmations/*; BrokerQmt.tsx", "已完成申请、批准、过期、内容哈希和一次性消费；HUMAN_CONFIRM 订单必须经过审计确认。", "feat/1202-human-confirm"],
+      ["Phase 12", "Reconcile、Human Confirm、Small Live", "TASK-1203", "Live Shadow", "done", "在不真实下单的情况下验证完整交易链。", "services/live_shadow.py; /api/broker/live-shadow/run; tests/test_phase12_safety_workflow.py", "已完成 mock-only 验收：preflight→FRESH quote→trade→fill→reconcile，明确不联网、不真实下单。", "test/1203-live-shadow"],
+      ["Phase 12", "Reconcile、Human Confirm、Small Live", "TASK-1204", "Small Live", "blocked", "在小额、人工确认和安全门下进行受控实盘。", "真实 QMT SDK、账户凭证、发布 runbook 和实盘审批尚未提供。", "必须完成真实 Agent 安全评审；当前继续禁止自动交易。", "release/1204-small-live"],
 
       ["Phase 13", "运维与发布", "TASK-1301", "Backup / Restore", "partial", "备份、恢复、迁移和回滚运行数据。", "dev.ps1、Docker、data 目录和认证配置已存在。", "补 backup/restore 演练，不把 data 纳入 Git。", "ops/1301-backup-restore"],
       ["Phase 13", "运维与发布", "TASK-1302", "Observability", "partial", "统一日志、指标、任务 correlation id 和敏感信息过滤。", "日志、任务记录、SSE、数据状态 API 已存在。", "补统一 metrics 和 correlation id。", "ops/1302-observability"],
@@ -334,7 +334,7 @@
       document.getElementById("percent").textContent = `${percent.toFixed(1)}%`;
       document.querySelector(".ring").style.setProperty("--progress", `${percent}%`);
       document.getElementById("summary-title").textContent = `${counts.done}/${tasks.length} 个任务已完成`;
-      document.getElementById("summary-text").textContent = `当前阶段：TASK-1101 · Broker Protocol。Phase 9 的 TASK-0901 至 TASK-0903 与 Phase 10 的 TASK-1001 至 TASK-1005 已完成；当前只支持本地 paper/mock，不接真实券商。`;
+      document.getElementById("summary-text").textContent = `当前阶段：Phase 11 已完成 mock-safe 契约。TASK-1101 至 TASK-1106 已具备协议、隔离 Agent、行情/交易适配、对账和 Kill Switch 证据；当前只支持本地 paper/mock，不接真实 QMT 或实盘。`;
     }
 
     document.querySelectorAll("[data-filter]").forEach(button => {

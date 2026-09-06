@@ -17,6 +17,7 @@ from app.api import (
     alerts,
     analysis,
     backtest,
+    broker,
     data,
     ext_data,
     financials,
@@ -108,6 +109,8 @@ async def _application_lifespan(app: FastAPI):
     app.state.repo = repo
     from app.services.transaction_store import TransactionStore
     app.state.transaction_store = TransactionStore(store.data_dir)
+    from app.broker.runtime import BrokerRuntime
+    app.state.broker_runtime = BrokerRuntime(store.data_dir)
     from app.services.mining_manager import MiningJobManager
 
     mining_manager = MiningJobManager(store.data_dir)
@@ -467,6 +470,7 @@ app.include_router(intraday.router)
 app.include_router(indices.router)
 app.include_router(overview.router)
 app.include_router(abnormal.router)
+app.include_router(broker.router)
 app.include_router(regime.router)
 app.include_router(analysis.router)
 app.include_router(pipeline.router)
