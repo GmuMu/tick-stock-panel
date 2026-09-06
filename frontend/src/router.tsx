@@ -34,6 +34,7 @@ const Indices = lazy(() => import('./pages/Indices').then(m => ({ default: m.Ind
 const Branding = lazy(() => import('./pages/Branding').then(m => ({ default: m.Branding })))
 const Settings = lazy(() => import('./pages/Settings').then(m => ({ default: m.Settings })))
 const Regime = lazy(() => import('./pages/Regime').then(m => ({ default: m.Regime })))
+const TradingResearch = lazy(() => import('./pages/TradingResearch').then(m => ({ default: m.TradingResearch })))
 const AbnormalMoves = lazy(() => import('./pages/AbnormalMoves').then(m => ({ default: m.AbnormalMoves })))
 const Dev = lazy(() => import('./pages/Dev').then(m => ({ default: m.Dev })))
 
@@ -58,6 +59,7 @@ const CORE_ROUTE_PATHS = new Set([
   '/limit-ladder',
   '/indices',
   '/regime',
+  '/trading-research',
   '/abnormal',
   '/branding',
   '/settings',
@@ -131,7 +133,8 @@ export const router = createBrowserRouter([
       { path: 'lots', element: <Lots /> },
       { path: 'limit-ladder', element: <LimitUpLadder /> },
       { path: 'indices', element: <Indices /> },
-    { path: 'regime', element: <Regime /> },
+      { path: 'regime', element: <Regime /> },
+      { path: 'trading-research', element: <TradingResearch /> },
       { path: 'abnormal', element: <AbnormalMoves /> },
       { path: 'branding', element: <Branding /> },
       { path: 'settings', element: <Settings /> },

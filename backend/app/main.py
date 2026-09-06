@@ -35,6 +35,7 @@ from app.api import (
     signals,
     stock_analysis,
     strategy,
+    trading_research,
     watchlist,
 )
 from app.api import auth as auth_api
@@ -104,6 +105,8 @@ async def _application_lifespan(app: FastAPI):
     repo = KlineRepository(store)
     app.state.datastore = store
     app.state.repo = repo
+    from app.services.transaction_store import TransactionStore
+    app.state.transaction_store = TransactionStore(store.data_dir)
     from app.services.mining_manager import MiningJobManager
 
     mining_manager = MiningJobManager(store.data_dir)
@@ -473,6 +476,7 @@ app.include_router(stock_analysis.router)
 app.include_router(market_recap.router)
 app.include_router(settings_api.router)
 app.include_router(strategy.router)
+app.include_router(trading_research.router)
 app.include_router(signals.router)
 app.include_router(monitor_rules.router)
 app.include_router(lots.router)

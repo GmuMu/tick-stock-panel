@@ -912,6 +912,76 @@ export interface AbnormalIntradayPayload {
   rows?: AbnormalIntradayRow[]
 }
 
+// ===== 交易研究工作台(Phase 8, 不含真实下单) =====
+export interface TradingThesis {
+  id: string
+  symbol: string
+  title: string
+  direction: 'long' | 'short' | 'observe'
+  hypothesis: string
+  evidence: string[]
+  counter_evidence: string[]
+  status: 'open' | 'confirmed' | 'invalidated' | 'archived'
+  version: number
+  revision: number
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface TradingPlan {
+  id: string
+  thesis_id?: string | null
+  symbol: string
+  direction: 'buy' | 'sell' | 'observe'
+  entry_price?: number | null
+  stop_price?: number | null
+  target_price?: number | null
+  position_pct?: number | null
+  quantity?: number | null
+  valid_from?: string | null
+  valid_until?: string | null
+  candidate_source: Record<string, unknown>
+  status: 'draft' | 'active' | 'closed' | 'cancelled' | 'expired'
+  notes: string
+  revision: number
+  created_at: string
+  updated_at: string
+}
+
+export interface DecisionGate {
+  id: string
+  plan_id: string
+  status: 'pending' | 'approved' | 'rejected' | 'expired'
+  rationale: string
+  expires_at?: string | null
+  decided_at?: string | null
+  revision: number
+  created_at: string
+  updated_at: string
+}
+
+export interface JournalEntry {
+  id: string
+  plan_id?: string | null
+  decision_id?: string | null
+  kind: 'plan' | 'decision' | 'order' | 'fill' | 'review' | 'note'
+  content: string
+  payload: Record<string, unknown>
+  occurred_at: string
+  revision: number
+  created_at: string
+}
+
+export interface TradingResearchSummary {
+  contract_version: string
+  theses: number
+  plans: number
+  decisions: number
+  journal: number
+  audit_events: number
+}
+
 export interface WatchScope {
   contract_version: string
   scope_version: string
@@ -2603,6 +2673,28 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(payload),
     }),
+
+  // 交易研究工作台: 只记录研究/纸面计划, 不触发真实订单
+  tradingResearchSummary: () => request<TradingResearchSummary>('/api/trading-research/summary'),
+  tradingTheses: () => request<{ items: TradingThesis[] }>('/api/trading-research/theses'),
+  tradingThesisCreate: (payload: Omit<TradingThesis, 'id' | 'version' | 'revision' | 'created_at' | 'updated_at'> & { idempotency_key?: string }) =>
+    request<{ item: TradingThesis }>('/api/trading-research/theses', { method: 'POST', body: JSON.stringify(payload) }),
+  tradingThesisUpdate: (id: string, payload: Partial<TradingThesis> & { expected_revision?: number; idempotency_key?: string }) =>
+    request<{ item: TradingThesis }>(`/api/trading-research/theses/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  tradingPlans: () => request<{ items: TradingPlan[] }>('/api/trading-research/plans'),
+  tradingPlanCreate: (payload: Omit<TradingPlan, 'id' | 'revision' | 'created_at' | 'updated_at'> & { idempotency_key?: string }) =>
+    request<{ item: TradingPlan }>('/api/trading-research/plans', { method: 'POST', body: JSON.stringify(payload) }),
+  tradingPlanUpdate: (id: string, payload: Partial<TradingPlan> & { expected_revision?: number; idempotency_key?: string }) =>
+    request<{ item: TradingPlan }>(`/api/trading-research/plans/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  tradingDecisions: () => request<{ items: DecisionGate[] }>('/api/trading-research/decisions'),
+  tradingDecisionCreate: (payload: { plan_id: string; status?: DecisionGate['status']; rationale?: string; expires_at?: string; idempotency_key?: string }) =>
+    request<{ item: DecisionGate }>('/api/trading-research/decisions', { method: 'POST', body: JSON.stringify(payload) }),
+  tradingDecisionTransition: (id: string, payload: { status: DecisionGate['status']; rationale?: string; expires_at?: string; expected_revision?: number; idempotency_key?: string }) =>
+    request<{ item: DecisionGate }>(`/api/trading-research/decisions/${encodeURIComponent(id)}/transition`, { method: 'POST', body: JSON.stringify(payload) }),
+  tradingJournal: () => request<{ items: JournalEntry[] }>('/api/trading-research/journal'),
+  tradingJournalCreate: (payload: Omit<JournalEntry, 'id' | 'revision' | 'created_at'> & { idempotency_key?: string }) =>
+    request<{ item: JournalEntry }>('/api/trading-research/journal', { method: 'POST', body: JSON.stringify(payload) }),
+  tradingAudit: () => request<{ items: Record<string, unknown>[] }>('/api/trading-research/audit'),
 
   limitLadder: (asOf?: string, extColumns?: string, direction?: 'up' | 'down') => {
     const params = new URLSearchParams()

@@ -118,6 +118,14 @@ export const QK = {
   regimeCoverage:       ['regime-coverage'] as const,
   regimePhases:         (start?: string, end?: string) => ['regime-phases', start ?? '', end ?? ''] as const,
   regimeMainline:       (kind: string, start?: string, end?: string) => ['regime-mainline', kind, start ?? '', end ?? ''] as const,
+
+  // 交易研究工作台(Phase 8)
+  tradingResearchSummary: ['trading-research-summary'] as const,
+  tradingTheses: ['trading-theses'] as const,
+  tradingPlans: ['trading-plans'] as const,
+  tradingDecisions: ['trading-decisions'] as const,
+  tradingJournal: ['trading-journal'] as const,
+  tradingAudit: ['trading-audit'] as const,
 } as const
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====

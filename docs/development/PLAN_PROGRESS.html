@@ -225,11 +225,11 @@
       ["Phase 7", "Market Regime", "TASK-0703", "Regime Smoothing", "done", "固化 EMA、确认天数和跨日状态。", "backend/app/services/market_phase.py; backend/app/services/regime_builder.py; backend/tests/test_market_phase.py; docs/tasks/TASK-0703-regime-smoothing.md", "已完成：stateful classifier、跨分片等价和原子 phase_state sidecar 已落地。", "test/0703-regime-smoothing"],
       ["Phase 7", "Market Regime", "TASK-0704", "Regime UI", "done", "把阶段、覆盖率和数据质量在界面清楚展示。", "frontend/src/pages/Regime.tsx; frontend/src/lib/api.ts; docs/tasks/TASK-0704-regime-ui.md", "已完成：质量摘要、缺口提示、资金效应卡和资金评分曲线已接入现有 Regime 页面。", "feat/0704-regime-ui"],
 
-      ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0801", "Transaction DB", "gap", "建立交易事件、计划、决定和审计的持久化边界。", "尚未发现 transaction DB 或交易事件模型。", "先选存储边界并写 ADR，再实现 schema。", "feat/0801-transaction-db"],
-      ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0802", "Thesis", "gap", "保存研究论点、证据、反证和版本。", "尚未发现正式 Thesis 模块。", "依赖 0801，定义 Markdown/JSON 兼容。", "feat/0802-thesis"],
-      ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0803", "Trade Plan", "gap", "把候选、计划价位、仓位和有效期结构化。", "尚未发现 TradePlan 模型和 API。", "依赖 0802 与候选 provenance。", "feat/0803-trade-plan"],
-      ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0804", "Decision Gate", "gap", "实现可解释、可审计、可过期的决策门。", "尚未发现 DecisionGate 状态机。", "依赖 0803、风险状态和审计字段。", "feat/0804-decision-gate"],
-      ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0805", "Journal", "gap", "记录计划、决定、订单、成交和复盘日志。", "现有 AI reports 不能替代交易 Journal。", "依赖 0801/0804，先做只读审计闭环。", "feat/0805-journal"],
+      ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0801", "Transaction DB", "done", "建立交易事件、计划、决定和审计的持久化边界。", "transaction_store.py：SQLite WAL、事务、幂等键与不可变审计事件；ADR-20。", "已完成：数据库放在用户 data/user_data，运行时数据库不入 Git。", "feat/0801-transaction-db"],
+      ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0802", "Thesis", "done", "保存研究论点、证据、反证和版本。", "trading_research API 与 TradingResearch 页面。", "已完成：支持论点状态、version/revision 和乐观锁。", "feat/0802-thesis"],
+      ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0803", "Trade Plan", "done", "把候选、计划价位、仓位和有效期结构化。", "trade_plans 表、API 与交易研究工作台。", "已完成：支持 Thesis 链接、价位、仓位、有效期和候选来源。", "feat/0803-trade-plan"],
+      ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0804", "Decision Gate", "done", "实现可解释、可审计、可过期的决策门。", "decision_gates 表与 transition API。", "已完成：支持 pending/approved/rejected/expired、理由、过期和审计。", "feat/0804-decision-gate"],
+      ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0805", "Journal", "done", "记录计划、决定、订单、成交和复盘日志。", "journal_entries 与只读 audit API。", "已完成：订单/成交为后续纸面执行预留字段，本阶段不接真实交易。", "feat/0805-journal"],
 
       ["Phase 9", "Unified Signal、Paper Loop、Review", "TASK-0901", "Unified Signal", "partial", "把策略、指标、自定义信号和监控事件统一为可追踪 Signal。", "custom_signals.py; monitor events; strategy signals", "新增适配层，不改写已有信号语义。", "feat/0901-unified-signal"],
       ["Phase 9", "Unified Signal、Paper Loop、Review", "TASK-0902", "Paper Loop", "gap", "建立纸面执行、模拟成交、持仓和结果回放闭环。", "尚未发现正式 paper execution loop。", "依赖 0901、0804 与 OMS 前置约束。", "feat/0902-paper-loop"],
@@ -334,7 +334,7 @@
       document.getElementById("percent").textContent = `${percent.toFixed(1)}%`;
       document.querySelector(".ring").style.setProperty("--progress", `${percent}%`);
       document.getElementById("summary-title").textContent = `${counts.done}/${tasks.length} 个任务已完成`;
-      document.getElementById("summary-text").textContent = `当前阶段：TASK-0801 · Transaction DB。Phase 7 的 TASK-0701 至 TASK-0704 已完成；Phase 6 的 TASK-0601 至 TASK-0605 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
+      document.getElementById("summary-text").textContent = `当前阶段：TASK-0901 · Unified Signal。Phase 8 的 TASK-0801 至 TASK-0805 已完成；Phase 7 的 TASK-0701 至 TASK-0704 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
     }
 
     document.querySelectorAll("[data-filter]").forEach(button => {

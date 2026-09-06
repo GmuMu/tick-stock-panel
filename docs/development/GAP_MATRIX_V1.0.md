@@ -93,11 +93,11 @@
 
 | Task | 状态 | 真实证据 / 入口 | 下一步 |
 | --- | --- | --- | --- |
-| TASK-0801 | GAP | 未发现计划所需 transaction DB、交易事件模型或独立仓储 | 先选存储边界并写 ADR，再实现 schema |
-| TASK-0802 | GAP | 未发现正式 Thesis 模块；现有 AI reports/research 不是交易 thesis 契约 | 依赖 0801，Markdown/JSON 兼容需先定义 |
-| TASK-0803 | GAP | 未发现 TradePlan 模型和 API | 依赖 0802 与策略候选 provenance |
-| TASK-0804 | GAP | 未发现 DecisionGate 状态机 | 依赖 0803、风险状态和审计字段 |
-| TASK-0805 | GAP | 未发现交易 Journal 领域模型；现有报告存储不能直接替代 | 依赖 0801/0804，先做只读审计闭环 |
+| TASK-0801 | DONE | `services/transaction_store.py` 使用 `data/user_data/transactions.sqlite3`、WAL、事务、幂等键和不可变审计事件；`docs/adr/ADR-20-transaction-research-sqlite.md` | 进入 Phase 9 `TASK-0901`，后续备份任务纳入 SQLite WAL |
+| TASK-0802 | DONE | `api/trading_research.py` 与 `frontend/src/pages/TradingResearch.tsx` 保存论点、证据、反证、状态、version/revision | 后续可接统一 Signal，不改变 Thesis 历史版本语义 |
+| TASK-0803 | DONE | `trade_plans` 表和 `/api/trading-research/plans` 结构化标的、价位、仓位、有效期和 candidate provenance | 进入 Phase 9 Paper Loop，禁止绕过 Decision Gate 形成订单 |
+| TASK-0804 | DONE | `decision_gates` 表和 transition API 支持 pending/approved/rejected/expired、理由、过期和审计 | 后续 Risk/OMS 只能消费已审计决定，不在本阶段下单 |
+| TASK-0805 | DONE | `journal_entries` 与只读 `/api/trading-research/audit` 支持计划、决定、订单/成交预留字段和复盘日志 | 进入 Phase 9 `TASK-0901`，后续补 paper execution 回放 |
 
 ## Phase 9：Unified Signal、Paper Loop、Review
 
