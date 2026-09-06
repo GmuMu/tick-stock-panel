@@ -76,6 +76,7 @@ class SafetyController:
     def trip(self, reason: str = "manual kill switch") -> dict[str, Any]:
         with self._lock:
             self._state.kill_switch = True
+            self._state.real_order_enabled = False
             self._state.reason = reason
             self._state.updated_at = utc_now()
             self._save()
@@ -85,11 +86,25 @@ class SafetyController:
         with self._lock:
             self._state.kill_switch = False
             self._state.reason = None
+            self._state.real_order_enabled = False
             self._state.updated_at = utc_now()
             self._save()
             return self._state.to_dict()
 
-    def assert_can_trade(self, *, connected: bool, human_confirmed: bool) -> None:
+    def set_real_order_enabled(self, enabled: bool) -> dict[str, Any]:
+        with self._lock:
+            self._state.real_order_enabled = bool(enabled)
+            self._state.updated_at = utc_now()
+            self._save()
+            return self._state.to_dict()
+
+    def assert_can_trade(
+        self,
+        *,
+        connected: bool,
+        human_confirmed: bool,
+        real_order_required: bool = False,
+    ) -> None:
         with self._lock:
             if self._state.kill_switch:
                 raise BrokerSafetyError(
@@ -102,3 +117,8 @@ class SafetyController:
                 raise BrokerSafetyError("AUTO 模式当前被安全策略禁用", code="AUTO_DISABLED")
             if self._state.mode == "HUMAN_CONFIRM" and not human_confirmed:
                 raise BrokerSafetyError("HUMAN_CONFIRM 模式需要人工确认", code="HUMAN_CONFIRM_REQUIRED")
+            if real_order_required and not self._state.real_order_enabled:
+                raise BrokerSafetyError(
+                    "真实下单尚未通过 Small Live 激活",
+                    code="QMT_LIVE_DISABLED",
+                )

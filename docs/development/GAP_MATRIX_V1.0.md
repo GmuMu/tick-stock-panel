@@ -135,7 +135,7 @@
 | TASK-1201 | DONE | `services/account_reconcile.py`、`/api/broker/reconcile`、`/api/broker/reconciliations` 保存账户/订单/成交/持仓对账历史 | 当前为 normalized Mock Broker；真实账户快照仍需独立 QMT Agent |
 | TASK-1202 | DONE | `services/human_confirm.py`、`/api/broker/confirmations/*` 实现申请、批准、过期、内容哈希和一次性消费 | HUMAN_CONFIRM 已接入 Broker UI；不等于授权真实账户 |
 | TASK-1203 | DONE | `services/live_shadow.py`、`/api/broker/live-shadow/run`、`tests/test_phase12_safety_workflow.py` 验证 quote→trade→fill→reconcile | 仅 mock-only；结果明确 `real_order_submitted=false` |
-| TASK-1204 | PARTIAL | `services/small_live_preflight.py`、`/api/broker/small-live/preflight` 已完成只读技术预检和脱敏审计；`activation_allowed=false`、AUTO 仍禁用 | 真实 QMT SDK、账户、Agent 安全评审、限额、发布审批和实盘验收仍缺失，当前禁止自动交易 |
+| TASK-1204 | PARTIAL | `services/small_live_preflight.py`、`broker/external_agent.py`、`broker/qmt_vendor_agent.py`、`/api/broker/small-live/preflight` 已完成预检和隔离 Agent 桥接；双重实盘开关默认关闭 | 真实 QMT SDK、账户、Agent 安全评审、限额、发布审批和实盘验收仍缺失，当前禁止自动交易 |
 
 ## Phase 13：运维与发布
 

@@ -64,10 +64,15 @@ def run_stdio_agent(core: QmtAgentCore) -> None:
     for line in sys.stdin:
         if not line.strip():
             continue
+        request_id = None
         try:
-            result = core.dispatch(json.loads(line))
+            command = json.loads(line)
+            request_id = command.get("id")
+            result = core.dispatch(command)
         except Exception as exc:
             result = {"ok": False, "error": str(exc), "code": getattr(exc, "code", "AGENT_ERROR")}
+        if request_id is not None:
+            result["id"] = request_id
         sys.stdout.write(json.dumps(result, ensure_ascii=False) + "\n")
         sys.stdout.flush()
 

@@ -35,12 +35,32 @@ class QmtTradeAdapter:
         self.agent = agent
         self.safety = safety
 
-    def submit(self, request: OrderRequest, *, connected: bool) -> dict[str, Any]:
-        self.safety.assert_can_trade(connected=connected, human_confirmed=request.human_confirmed)
+    def submit(
+        self,
+        request: OrderRequest,
+        *,
+        connected: bool,
+        real_order_required: bool = False,
+    ) -> dict[str, Any]:
+        self.safety.assert_can_trade(
+            connected=connected,
+            human_confirmed=request.human_confirmed,
+            real_order_required=real_order_required,
+        )
         return self.agent.dispatch({"action": "submit_order", "order": request.to_dict()})["result"]
 
-    def cancel(self, order_id: str, *, connected: bool) -> dict[str, Any]:
-        self.safety.assert_can_trade(connected=connected, human_confirmed=True)
+    def cancel(
+        self,
+        order_id: str,
+        *,
+        connected: bool,
+        real_order_required: bool = False,
+    ) -> dict[str, Any]:
+        self.safety.assert_can_trade(
+            connected=connected,
+            human_confirmed=True,
+            real_order_required=real_order_required,
+        )
         return self.agent.dispatch({"action": "cancel_order", "order_id": order_id})["result"]
 
 

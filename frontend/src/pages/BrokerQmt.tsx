@@ -17,6 +17,7 @@ export function BrokerQmt() {
   const [confirmationId, setConfirmationId] = useState<string | null>(null)
   const [clientOrderId, setClientOrderId] = useState<string | null>(null)
   const [smallLiveResult, setSmallLiveResult] = useState<SmallLivePreflight | null>(null)
+  const [activationConfirmationId, setActivationConfirmationId] = useState<string | null>(null)
   const status = useQuery({ queryKey: QK.brokerStatus, queryFn: api.brokerStatus })
   const orders = useQuery({ queryKey: QK.brokerOrders, queryFn: api.brokerOrders })
   const fills = useQuery({ queryKey: QK.brokerFills, queryFn: api.brokerFills })
@@ -26,6 +27,7 @@ export function BrokerQmt() {
     qc.invalidateQueries({ queryKey: ['broker-quote'] })
   }
   const connect = useMutation({ mutationFn: () => api.brokerConnect({ adapter: 'mock', mode: 'HUMAN_CONFIRM' }), onSuccess: refresh })
+  const connectQmt = useMutation({ mutationFn: () => api.brokerConnect({ adapter: 'qmt', mode: 'HUMAN_CONFIRM' }), onSuccess: refresh })
   const mode = useMutation({ mutationFn: (value: 'HUMAN_CONFIRM' | 'LIVE_SHADOW') => api.brokerSetMode(value), onSuccess: refresh })
   const disconnect = useMutation({ mutationFn: api.brokerDisconnect, onSuccess: refresh })
   const kill = useMutation({ mutationFn: () => api.brokerSafetyKill('用户在 Broker 工作台手动触发'), onSuccess: refresh })
@@ -75,8 +77,30 @@ export function BrokerQmt() {
   })
   const smallLivePreflight = useMutation({
     mutationFn: () => api.brokerSmallLivePreflight(order.symbol),
-    onSuccess: setSmallLiveResult,
+    onSuccess: result => {
+      setSmallLiveResult(result)
+      setActivationConfirmationId(null)
+    },
   })
+  const requestActivationConfirmation = useMutation({
+    mutationFn: () => api.brokerConfirmationRequest({
+      action: 'broker.enable_small_live',
+      payload: { preflight_id: smallLiveResult!.id, symbol: smallLiveResult!.symbol },
+    }),
+    onSuccess: result => setActivationConfirmationId(String(result.id)),
+  })
+  const activateSmallLive = useMutation({
+    mutationFn: () => api.brokerSmallLiveActivate({
+      preflight_id: smallLiveResult!.id,
+      confirmation_id: activationConfirmationId!,
+    }),
+    onSuccess: refresh,
+  })
+  const approveActivation = useMutation({
+    mutationFn: () => api.brokerConfirmationDecision(activationConfirmationId!, 'approved'),
+    onSuccess: () => activateSmallLive.mutate(),
+  })
+  const deactivateSmallLive = useMutation({ mutationFn: api.brokerSmallLiveDeactivate, onSuccess: refresh })
   const current = status.data
 
   return <div className="flex h-full min-h-0 flex-col">
@@ -88,7 +112,7 @@ export function BrokerQmt() {
         <Stat icon={ShieldCheck} label="执行模式" value={current?.mode ?? '—'} />
         <Stat icon={current?.kill_switch ? ShieldAlert : ShieldCheck} label="安全门" value={current?.kill_switch ? 'KILL SWITCH' : '可用'} tone={current?.kill_switch ? 'bad' : 'good'} />
       </div>
-      <div className="rounded-card border border-warning/30 bg-warning/10 px-4 py-3 text-xs text-warning"><ShieldCheck className="mr-1 inline h-3.5 w-3.5" />真实 QMT SDK、网络行情和真实下单均已关闭。HUMAN_CONFIRM 需要勾选人工确认，LIVE_SHADOW 只写入 mock 账本，AUTO 永久禁用。</div>
+      <div className="rounded-card border border-warning/30 bg-warning/10 px-4 py-3 text-xs text-warning"><ShieldCheck className="mr-1 inline h-3.5 w-3.5" />真实 QMT 连接需通过独立 Agent；真实下单必须同时满足预检、人工确认、双重配置和 SafetyState 激活，断开/重启/Kill Switch 会自动关闭。</div>
       <section className={cn(card, 'border-accent/30 bg-accent/5')}>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -100,11 +124,12 @@ export function BrokerQmt() {
         {smallLiveResult && <div className="mt-3 space-y-2">
           <div className="flex flex-wrap items-center gap-2 text-xs"><Badge text={smallLiveResult.status} tone={smallLiveResult.status === 'READY_FOR_REVIEW' ? 'good' : 'warn'} /><span className="text-secondary">通过 {smallLiveResult.checks.filter(item => item.status === 'passed').length} 项</span><span className="text-secondary">阻塞 {smallLiveResult.blocking_reasons.length} 项</span><span className="text-secondary">人工评审 {smallLiveResult.manual_review.length} 项</span></div>
           {smallLiveResult.blocking_reasons.length > 0 && <div className="rounded-btn border border-danger/30 bg-danger/5 p-2 text-[11px] text-danger">{smallLiveResult.blocking_reasons.map(item => <div key={item.code}>{item.detail}</div>)}</div>}
+          {smallLiveResult.status === 'READY_FOR_REVIEW' && !current?.real_order_enabled && <div className="flex flex-wrap items-center gap-2 rounded-btn border border-warning/30 bg-warning/10 p-2 text-[11px] text-warning"><span>技术预检通过，仍需独立人工确认才能激活。</span>{activationConfirmationId ? <button onClick={() => approveActivation.mutate()} disabled={approveActivation.isPending || activateSmallLive.isPending} className="rounded-btn bg-warning px-2 py-1 text-[10px] text-white cursor-pointer">批准并激活</button> : <button onClick={() => requestActivationConfirmation.mutate()} disabled={requestActivationConfirmation.isPending} className="rounded-btn border border-warning/30 px-2 py-1 text-[10px] text-warning cursor-pointer">申请激活确认</button>}{activationConfirmationId && <span>确认编号 {activationConfirmationId} 已创建</span>}</div>}
           <div className="text-[10px] text-muted">预检结果不会授权实盘：activation_allowed=false，real_order_enabled=false。</div>
         </div>}
       </section>
       <div className="grid gap-3 lg:grid-cols-2">
-        <section className={card}><h2 className="text-sm font-semibold">连接与安全</h2><div className="mt-3 flex flex-wrap gap-2"><button onClick={() => connect.mutate()} disabled={connect.isPending || current?.connection === 'connected'} className="rounded-btn bg-accent px-3 py-2 text-xs text-white disabled:opacity-50 cursor-pointer">连接 Mock Broker</button><button onClick={() => disconnect.mutate()} disabled={disconnect.isPending || current?.connection !== 'connected'} className="rounded-btn border border-border px-3 py-2 text-xs text-secondary disabled:opacity-50 cursor-pointer">断开</button><button onClick={() => mode.mutate('HUMAN_CONFIRM')} disabled={mode.isPending || current?.mode === 'HUMAN_CONFIRM'} className="rounded-btn border border-warning/30 px-3 py-2 text-xs text-warning disabled:opacity-50 cursor-pointer">HUMAN_CONFIRM</button><button onClick={() => mode.mutate('LIVE_SHADOW')} disabled={mode.isPending || current?.mode === 'LIVE_SHADOW'} className="rounded-btn border border-accent/30 px-3 py-2 text-xs text-accent disabled:opacity-50 cursor-pointer">LIVE_SHADOW</button>{current?.kill_switch ? <button onClick={() => reset.mutate()} className="rounded-btn border border-bull/30 px-3 py-2 text-xs text-bull cursor-pointer">解除 Kill Switch</button> : <button onClick={() => kill.mutate()} className="rounded-btn border border-danger/30 px-3 py-2 text-xs text-danger cursor-pointer">触发 Kill Switch</button>}</div><div className="mt-3 grid grid-cols-2 gap-2 text-xs text-secondary"><span>Agent: <b className="text-foreground">{current?.agent?.transport ?? '—'}</b></span><span>隔离: <b className="text-foreground">{current?.agent?.isolated ? '是' : '—'}</b></span><span>SDK: <b className="text-foreground">{current?.sdk_configured ? '已配置' : '未配置'}</b></span><span>真实下单: <b className="text-foreground">{current?.real_order_enabled ? '开启' : '关闭'}</b></span></div>{current?.last_error && <p className="mt-3 text-[11px] text-warning">{current.last_error}</p>}</section>
+        <section className={card}><h2 className="text-sm font-semibold">连接与安全</h2><div className="mt-3 flex flex-wrap gap-2"><button onClick={() => connect.mutate()} disabled={connect.isPending || current?.connection === 'connected'} className="rounded-btn bg-accent px-3 py-2 text-xs text-white disabled:opacity-50 cursor-pointer">连接 Mock Broker</button><button onClick={() => connectQmt.mutate()} disabled={connectQmt.isPending || current?.connection === 'connected'} className="rounded-btn border border-accent/30 px-3 py-2 text-xs text-accent disabled:opacity-50 cursor-pointer">连接 QMT Agent</button><button onClick={() => disconnect.mutate()} disabled={disconnect.isPending || current?.connection !== 'connected'} className="rounded-btn border border-border px-3 py-2 text-xs text-secondary disabled:opacity-50 cursor-pointer">断开</button><button onClick={() => mode.mutate('HUMAN_CONFIRM')} disabled={mode.isPending || current?.mode === 'HUMAN_CONFIRM'} className="rounded-btn border border-warning/30 px-3 py-2 text-xs text-warning disabled:opacity-50 cursor-pointer">HUMAN_CONFIRM</button><button onClick={() => mode.mutate('LIVE_SHADOW')} disabled={mode.isPending || current?.mode === 'LIVE_SHADOW'} className="rounded-btn border border-accent/30 px-3 py-2 text-xs text-accent disabled:opacity-50 cursor-pointer">LIVE_SHADOW</button>{current?.real_order_enabled ? <button onClick={() => deactivateSmallLive.mutate()} className="rounded-btn border border-danger/30 px-3 py-2 text-xs text-danger cursor-pointer">停用真实下单</button> : null}{current?.kill_switch ? <button onClick={() => reset.mutate()} className="rounded-btn border border-bull/30 px-3 py-2 text-xs text-bull cursor-pointer">解除 Kill Switch</button> : <button onClick={() => kill.mutate()} className="rounded-btn border border-danger/30 px-3 py-2 text-xs text-danger cursor-pointer">触发 Kill Switch</button>}</div><div className="mt-3 grid grid-cols-2 gap-2 text-xs text-secondary"><span>Agent: <b className="text-foreground">{current?.agent?.transport ?? '—'}</b></span><span>隔离: <b className="text-foreground">{current?.agent?.isolated ? '是' : '—'}</b></span><span>SDK: <b className="text-foreground">{current?.sdk_configured ? '已配置' : '未配置'}</b></span><span>Agent 下单: <b className="text-foreground">{current?.agent_order_enabled ? '已配置' : '关闭'}</b></span><span>真实下单: <b className="text-foreground">{current?.real_order_enabled ? '开启' : '关闭'}</b></span></div>{current?.last_error && <p className="mt-3 text-[11px] text-warning">{current.last_error}</p>}</section>
         <section className={card}><h2 className="text-sm font-semibold">行情质量 / provenance</h2><div className="mt-3 flex gap-2"><input className={input} value={symbol} onChange={e => setSymbol(e.target.value)} placeholder="000001.SZ" /><input className={cn(input, 'max-w-32')} value={price} onChange={e => setPrice(e.target.value)} type="number" /><button onClick={() => seed.mutate()} disabled={seed.isPending} className="rounded-btn bg-accent px-3 py-2 text-xs text-white cursor-pointer">注入 Mock 行情</button></div><QuoteLine symbol={symbol} /></section>
       </div>
       <div className="grid gap-3 lg:grid-cols-[20rem_1fr]">

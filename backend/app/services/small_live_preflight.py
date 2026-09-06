@@ -136,6 +136,26 @@ class SmallLivePreflightService:
         else:
             self._passed(checks, "qmt_network", "QMT 网络通道已启用")
 
+        if status.get("agent_order_enabled") is not True:
+            self._blocked(
+                checks,
+                blocking,
+                "QMT_AGENT_ORDERS_DISABLED",
+                "QMT Agent 下单能力未显式开启",
+            )
+        else:
+            self._passed(checks, "qmt_agent_orders", "QMT Agent 下单能力已配置")
+
+        if status.get("live_order_configured") is not True:
+            self._blocked(
+                checks,
+                blocking,
+                "QMT_LIVE_CONFIG_DISABLED",
+                "应用侧 QMT_LIVE_ORDER_ENABLED 未开启",
+            )
+        else:
+            self._passed(checks, "qmt_live_config", "应用侧实盘配置开关已开启")
+
     def _check_agent(
         self,
         status: dict[str, Any],
@@ -143,7 +163,10 @@ class SmallLivePreflightService:
         blocking: list[dict[str, str]],
     ) -> None:
         agent = status.get("agent") or {}
-        if agent.get("isolated") is not True or agent.get("transport") != "stdio-jsonl":
+        if (
+            agent.get("isolated") is not True
+            or agent.get("transport") not in {"stdio-jsonl", "external-stdio-jsonl"}
+        ):
             self._blocked(
                 checks,
                 blocking,

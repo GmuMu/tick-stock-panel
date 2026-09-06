@@ -30,7 +30,8 @@ def _error(exc: Exception) -> HTTPException:
         status = 409 if exc.code in {
             "KILL_SWITCH_ACTIVE", "HUMAN_CONFIRM_REQUIRED", "AUTO_DISABLED",
             "BROKER_DISCONNECTED", "CONFIRM_NOT_APPROVED", "CONFIRM_NOT_PENDING",
-            "CONFIRM_PAYLOAD_MISMATCH",
+            "CONFIRM_PAYLOAD_MISMATCH", "QMT_LIVE_DISABLED", "QMT_LIVE_NOT_READY",
+            "PREFLIGHT_NOT_FOUND", "PREFLIGHT_BLOCKED", "QMT_AGENT_ORDERS_DISABLED",
         } else 400
         return HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc)})
     return HTTPException(status_code=500, detail={"code": "BROKER_INTERNAL_ERROR", "message": str(exc)})
@@ -96,6 +97,11 @@ class LiveShadowIn(BrokerOrderIn):
 
 class SmallLivePreflightIn(BaseModel):
     symbol: str = Field(min_length=1, max_length=32)
+
+
+class SmallLiveActivateIn(BaseModel):
+    preflight_id: str = Field(min_length=1, max_length=160)
+    confirmation_id: str = Field(min_length=1, max_length=160)
 
 
 @router.get("/status")
@@ -246,6 +252,22 @@ def small_live_preflight(req: SmallLivePreflightIn, request: Request):
 @router.get("/small-live/preflights")
 def small_live_preflights(request: Request, limit: int = Query(100, ge=1, le=500)):
     return {"items": _runtime(request).list_small_live_preflights(limit)}
+
+
+@router.post("/small-live/activate")
+def activate_small_live(req: SmallLiveActivateIn, request: Request):
+    try:
+        return _runtime(request).activate_small_live(req.preflight_id, req.confirmation_id)
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/small-live/deactivate")
+def deactivate_small_live(request: Request):
+    try:
+        return _runtime(request).deactivate_small_live()
+    except Exception as exc:
+        raise _error(exc) from exc
 
 
 @router.get("/safety")

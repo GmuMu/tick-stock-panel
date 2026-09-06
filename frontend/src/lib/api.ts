@@ -1081,6 +1081,8 @@ export interface BrokerStatus {
   agent: { pid: number; transport: string; vendor_sdk_loaded: boolean; isolated: boolean }
   sdk_configured: boolean
   network_enabled: boolean
+  agent_order_enabled?: boolean
+  live_order_configured?: boolean
   real_order_enabled: boolean
   kill_switch: boolean
   safety: BrokerSafetyState
@@ -2942,6 +2944,13 @@ export const api = {
     }),
   brokerSmallLivePreflights: () =>
     request<{ items: SmallLivePreflight[] }>('/api/broker/small-live/preflights'),
+  brokerSmallLiveActivate: (payload: { preflight_id: string; confirmation_id: string }) =>
+    request<BrokerStatus>('/api/broker/small-live/activate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  brokerSmallLiveDeactivate: () =>
+    request<BrokerStatus>('/api/broker/small-live/deactivate', { method: 'POST' }),
 
   limitLadder: (asOf?: string, extColumns?: string, direction?: 'up' | 'down') => {
     const params = new URLSearchParams()

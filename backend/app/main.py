@@ -399,6 +399,9 @@ async def _application_lifespan(app: FastAPI):
         mrs = getattr(app.state, "minute_refresh", None)
         if mrs:
             mrs.stop()
+        broker_runtime = getattr(app.state, "broker_runtime", None)
+        if broker_runtime:
+            broker_runtime.close()
         logger.info("shutdown")
 
 
