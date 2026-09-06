@@ -94,6 +94,10 @@ class LiveShadowIn(BrokerOrderIn):
     simulate_fill: bool = False
 
 
+class SmallLivePreflightIn(BaseModel):
+    symbol: str = Field(min_length=1, max_length=32)
+
+
 @router.get("/status")
 def status(request: Request):
     return _runtime(request).status()
@@ -229,6 +233,19 @@ def live_shadow(req: LiveShadowIn, request: Request):
         )
     except Exception as exc:
         raise _error(exc) from exc
+
+
+@router.post("/small-live/preflight")
+def small_live_preflight(req: SmallLivePreflightIn, request: Request):
+    try:
+        return _runtime(request).run_small_live_preflight(req.symbol)
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/small-live/preflights")
+def small_live_preflights(request: Request, limit: int = Query(100, ge=1, le=500)):
+    return {"items": _runtime(request).list_small_live_preflights(limit)}
 
 
 @router.get("/safety")

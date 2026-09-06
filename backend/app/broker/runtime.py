@@ -15,6 +15,7 @@ from app.broker.safety import SafetyController
 from app.services.account_reconcile import AccountReconcileService
 from app.services.human_confirm import HumanConfirmStore
 from app.services.live_shadow import LiveShadowRunner
+from app.services.small_live_preflight import SmallLivePreflightService
 
 
 class BrokerRuntime:
@@ -32,6 +33,7 @@ class BrokerRuntime:
         self.account_reconcile = AccountReconcileService(self.data_dir)
         self.confirmations = HumanConfirmStore(self.data_dir)
         self.live_shadow = LiveShadowRunner()
+        self.small_live_preflight = SmallLivePreflightService(self)
         self._active = "mock"
         self._last_error: str | None = None
         self._lock = threading.RLock()
@@ -171,6 +173,12 @@ class BrokerRuntime:
         result = self.live_shadow.run(self, request, simulate_fill=simulate_fill)
         self._audit("live_shadow", result)
         return result
+
+    def run_small_live_preflight(self, symbol: str) -> dict[str, Any]:
+        return self.small_live_preflight.run(symbol)
+
+    def list_small_live_preflights(self, limit: int = 100) -> list[dict[str, Any]]:
+        return self.small_live_preflight.list(limit)
 
     def trip_kill_switch(self, reason: str) -> dict[str, Any]:
         result = self.safety.trip(reason)

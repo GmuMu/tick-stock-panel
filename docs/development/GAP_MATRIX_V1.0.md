@@ -135,7 +135,7 @@
 | TASK-1201 | DONE | `services/account_reconcile.py`、`/api/broker/reconcile`、`/api/broker/reconciliations` 保存账户/订单/成交/持仓对账历史 | 当前为 normalized Mock Broker；真实账户快照仍需独立 QMT Agent |
 | TASK-1202 | DONE | `services/human_confirm.py`、`/api/broker/confirmations/*` 实现申请、批准、过期、内容哈希和一次性消费 | HUMAN_CONFIRM 已接入 Broker UI；不等于授权真实账户 |
 | TASK-1203 | DONE | `services/live_shadow.py`、`/api/broker/live-shadow/run`、`tests/test_phase12_safety_workflow.py` 验证 quote→trade→fill→reconcile | 仅 mock-only；结果明确 `real_order_submitted=false` |
-| TASK-1204 | BLOCKED | 真实 QMT SDK、账户凭证、发布 runbook 和实盘审批尚未提供；AUTO 仍禁用 | 必须通过真实 Agent 安全评审后才能讨论小额实盘，当前禁止自动交易 |
+| TASK-1204 | PARTIAL | `services/small_live_preflight.py`、`/api/broker/small-live/preflight` 已完成只读技术预检和脱敏审计；`activation_allowed=false`、AUTO 仍禁用 | 真实 QMT SDK、账户、Agent 安全评审、限额、发布审批和实盘验收仍缺失，当前禁止自动交易 |
 
 ## Phase 13：运维与发布
 
@@ -159,5 +159,5 @@
 
 1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0205`、`TASK-0301` 至 `TASK-0304`、`TASK-0401` 至 `TASK-0405`、Phase 5 `TASK-0501` 至 `TASK-0504`、Phase 9 `TASK-0901` 至 `TASK-0903`、Phase 10 `TASK-1001` 至 `TASK-1005`、Phase 11 `TASK-1101` 至 `TASK-1106`、Phase 12 `TASK-1201` 至 `TASK-1203`、Phase 13 `TASK-1301` 至 `TASK-1304` 和 Phase 14 `TASK-1401` 至 `TASK-1404` 已完成当前阶段的 mock-safe/operations/research 契约，当前分支为 `feat/0301-indicator-spec`；Sequoia-X 的 `PrivatePlacement` 因公司行为数据缺口暂不实现。
 2. `full_minute` YAML 解析断点仍是已确认缺口，依赖它的自定义全量分钟任务不得宣称端到端完成。
-3. Phase 9/10/11/12-1201/1202/1203、Phase 13 和 Phase 14 已完成当前的 paper/mock/isolated-agent/operations/research 契约，但真实 QMT SDK、网络行情、真实账户和实盘仍保持关闭；TASK-1204 继续阻塞，当前禁止自动交易。
+3. Phase 9/10/11/12-1201/1202/1203、Phase 13 和 Phase 14 已完成当前的 paper/mock/isolated-agent/operations/research 契约；TASK-1204 已完成只读技术预检，但真实 QMT SDK、网络行情、真实账户和实盘审批仍缺失，激活继续阻塞，当前禁止自动交易。
 4. 以后每个 Task 必须先补契约测试，再实现代码；完成后更新对应 `docs/tasks/TASK-xxxx-*.md`，不以“页面能打开”代替验收。

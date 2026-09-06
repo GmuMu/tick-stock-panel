@@ -1089,6 +1089,19 @@ export interface BrokerStatus {
   updated_at: string
 }
 
+export interface SmallLivePreflight {
+  id: string
+  symbol: string
+  status: 'BLOCKED' | 'READY_FOR_REVIEW' | string
+  activation_allowed: false
+  real_order_enabled: false
+  checks: Array<{ code: string; status: 'passed' | 'blocked' | string; detail: string }>
+  blocking_reasons: Array<{ code: string; detail: string }>
+  manual_review: Array<{ code: string; detail: string }>
+  created_at: string
+  contract_version: string
+}
+
 export interface BrokerQuote {
   symbol: string
   last_price: number | null
@@ -2922,6 +2935,13 @@ export const api = {
     request<Record<string, unknown>>(`/api/broker/confirmations/${encodeURIComponent(id)}/decision`, { method: 'POST', body: JSON.stringify({ status }) }),
   brokerLiveShadow: (payload: { client_order_id: string; symbol: string; side: 'buy' | 'sell'; quantity: number; limit_price: number; order_type: 'limit'; simulate_fill?: boolean }) =>
     request<Record<string, unknown>>('/api/broker/live-shadow/run', { method: 'POST', body: JSON.stringify(payload) }),
+  brokerSmallLivePreflight: (symbol: string) =>
+    request<SmallLivePreflight>('/api/broker/small-live/preflight', {
+      method: 'POST',
+      body: JSON.stringify({ symbol }),
+    }),
+  brokerSmallLivePreflights: () =>
+    request<{ items: SmallLivePreflight[] }>('/api/broker/small-live/preflights'),
 
   limitLadder: (asOf?: string, extColumns?: string, direction?: 'up' | 'down') => {
     const params = new URLSearchParams()
