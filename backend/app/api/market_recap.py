@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date as date_cls
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -31,6 +32,9 @@ class AnalyzeRequest(BaseModel):
     """AI 大盘复盘请求。"""
     as_of: str | None = None  # 可选:复盘日期(YYYY-MM-DD),缺省取最新有数据日
     focus: str = ""           # 可选:用户追加的复盘关注点
+    report_template: Literal["default", "structured_json"] = "default"
+    report_type: str = "A股市场量价矛盾复盘"
+    forecast_title: str = "明日走势推演"
 
 
 @router.get("/dragon-tiger")
@@ -100,7 +104,17 @@ async def analyze_market(request: Request, req: AnalyzeRequest):
             raise HTTPException(400, f"as_of 格式应为 YYYY-MM-DD,收到: {req.as_of}")
 
     async def stream_gen():
-        async for chunk in recap_market_stream(repo, quote_service, depth_service, as_of, req.focus):
+        async for chunk in recap_market_stream(
+            repo,
+            quote_service,
+            depth_service,
+            as_of,
+            req.focus,
+            None,
+            req.report_template,
+            req.report_type,
+            req.forecast_title,
+        ):
             yield chunk + "\n"
 
     return StreamingResponse(
@@ -122,6 +136,9 @@ class SaveReportRequest(BaseModel):
     summary: str = ""
     emotion_score: int | None = None
     emotion_label: str = ""
+    report_template: Literal["default", "structured_json"] = "default"
+    report_type: str = ""
+    forecast_title: str = ""
 
 
 @router.get("/reports")
@@ -140,6 +157,9 @@ def save_report(request: Request, req: SaveReportRequest):
         "summary": req.summary,
         "emotion_score": req.emotion_score,
         "emotion_label": req.emotion_label,
+        "report_template": req.report_template,
+        "report_type": req.report_type,
+        "forecast_title": req.forecast_title,
     })
     # 推送到飞书(可选): 与定时复盘共用同一开关 review_push_enabled 与 _maybe_push_review。
     # 内部 try/except 静默降级, 不影响归档返回值。

@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncIterator
 from datetime import date
-from typing import AsyncIterator
+from typing import Literal
 
 from app.services.market_overview_builder import build_market_overview
 
@@ -91,6 +92,150 @@ _SYSTEM_PROMPT = """你是一位拥有 15 年 A 股一线研究经验的市场�
 6. **简明客观**:用读者能扫读的密度输出,总字数 1200-2000 字,重在客观信息密度
 
 现在请基于下方数据进行复盘。"""
+
+
+_STRUCTURED_JSON_SYSTEM_PROMPT = """你是一位顶级的 A 股市场分析师，风格冷静、客观、一针见血。
+
+任务：根据用户提供的今日 A 股结构化数据，生成一份专业的 JSON 格式分析报告。
+
+严格要求：
+1. 只能输出严格合法的 JSON 对象，禁止 Markdown 代码围栏、解释文字、前后缀和注释。
+2. 顶级键必须且只能包含："核心矛盾解读"、"操作建议"、"情景推演"。
+3. "核心矛盾解读"必须深入分析量价背离、多空博弈、风格割裂、技术面冲突；缺失数据必须写"未知"或明确说明数据未提供，不得编造。
+4. "操作建议"必须清晰、可执行、结构化，至少包含"仓位管理"、"持仓结构调整"、"风险对冲"、"关键观察点"。这是研究推演，不构成投资建议；所有结论必须以用户数据为依据，并注明不确定性。
+5. "情景推演"必须包含"标题"、"基准情景"、"乐观情景"、"悲观情景"；每个情景都要给出概率、触发条件和关键观察点。标题使用用户指定的推演标题。
+6. 用户指定的报告类型只能用于内容定位，不能改变 JSON 顶级结构。
+7. 所有字符串使用双引号，数组和对象必须符合 JSON 语法；不要输出 NaN、Infinity 或尾逗号。
+8. 不要把数据字段原样机械罗列，要解释数据之间的背离、冲突和可能演变。
+"""
+
+
+def _sector_names(rank: dict | None, key: str) -> list[str]:
+    """Return compact sector names for the structured review context."""
+    if not rank:
+        return []
+    return [str(item.get("name") or "未知") for item in (rank.get(key) or [])[:5]]
+
+
+def _structured_template_data(overview: dict) -> dict:
+    """Map the existing overview contract to the user's JSON template fields.
+
+    Margin balances, main/retail flow and ETF prices are not part of the current
+    overview contract, so they remain explicitly unknown instead of being guessed.
+    """
+    indices = overview.get("indices") or []
+    sh = next((item for item in indices if item.get("name") == "上证指数"), None) or {}
+    breadth = overview.get("breadth") or {}
+    amount = overview.get("amount") or {}
+    activity = overview.get("activity") or {}
+    trend = overview.get("trend") or {}
+    emotion = overview.get("emotion") or {}
+    limit = overview.get("limit") or {}
+
+    emotion_score = emotion.get("score", "未知")
+    emotion_label = emotion.get("label", "未知")
+    up_pct = breadth.get("up_pct", "未知")
+    if isinstance(emotion_score, (int, float)) and emotion_score >= 70:
+        risk_type = "情绪偏热，短线波动和分化风险上升"
+    elif isinstance(emotion_score, (int, float)) and emotion_score < 45:
+        risk_type = "情绪偏冷，市场宽度和承接能力不足"
+    else:
+        risk_type = "结构性分化，需观察量能与主线持续性"
+
+    if isinstance(up_pct, (int, float)):
+        stage_description = f"{emotion_label}阶段，上涨家数占比 {up_pct:.1f}%，情绪分 {emotion_score}"
+    else:
+        stage_description = f"{emotion_label}阶段，情绪分 {emotion_score}"
+
+    sh_price = sh.get("last_price")
+    sh_change = sh.get("change_pct")
+    sh_index = f"{sh_price:.2f}点" if isinstance(sh_price, (int, float)) else "未知"
+    sh_pct = f"{sh_change:+.2f}%" if isinstance(sh_change, (int, float)) else "未知"
+    above_ma60 = trend.get("above_ma60_pct")
+    market_trend = (
+        f"全市场站上60日线比例 {above_ma60:.1f}%"
+        if isinstance(above_ma60, (int, float))
+        else "未知"
+    )
+    volume = amount.get("total")
+    volume_text = f"{volume / 1e8:.0f}亿元" if isinstance(volume, (int, float)) else "未知"
+    turnover = activity.get("avg_turnover")
+    turnover_text = f"{turnover:.2f}%" if isinstance(turnover, (int, float)) else "未知"
+
+    return {
+        "市场阶段定性": {
+            "宏观判断": stage_description,
+            "主要风险": risk_type,
+        },
+        "宏观与流动性分析": {
+            "上证指数": f"{sh_index} ({sh_pct})，60日位置未知",
+            "大盘趋势": market_trend,
+            "股债关系": "未知（当前市场总览未提供股债收益率数据）",
+            "A股总成交额": f"{volume_text}，较前一日变化未知",
+            "市场换手率": turnover_text,
+            "主力与散户行为": "主力净流入未知（当前数据未提供）| 散户净流入未知（当前数据未提供）",
+            "杠杆资金动态": "两市融资余额未知，市场杠杆率未知（当前数据未提供）",
+        },
+        "情绪分析": {
+            "综合情绪": f"{emotion_score}（{emotion_label}）",
+            "赚钱效应": (
+                f"上涨家数占比 {up_pct:.1f}%"
+                if isinstance(up_pct, (int, float))
+                else "未知"
+            ),
+            "量价齐升家数": "未知（当前数据未提供逐股量价齐升统计）",
+            "大盘拥挤度": "未知（当前数据未提供拥挤度指标）",
+        },
+        "板块热力": {
+            "当前最强板块": (
+                _sector_names(overview.get("concept_rank"), "leading")
+                + _sector_names(overview.get("industry_rank"), "leading")
+            ),
+            "当前最弱板块": (
+                _sector_names(overview.get("concept_rank"), "lagging")
+                + _sector_names(overview.get("industry_rank"), "lagging")
+            ),
+            "潜在机会ETF(含实时价格)": [],
+            "涨停/炸板/最高连板": {
+                "涨停": limit.get("limit_up", "未知"),
+                "炸板": limit.get("broken", "未知"),
+                "最高连板": limit.get("max_boards", "未知"),
+            },
+        },
+    }
+
+
+def _build_structured_json_prompt(
+    overview: dict,
+    report_type: str,
+    forecast_title: str,
+) -> str:
+    report_type = report_type.strip() or "A股市场量价矛盾复盘"
+    forecast_title = forecast_title.strip() or "明日走势推演"
+    context = _structured_template_data(overview)
+    return "\n".join([
+        f"报告类型: {report_type}",
+        f"推演标题: {forecast_title}",
+        "",
+        "以下是已装配的今日 A 股数据。只能使用这些数据进行推演；字段为空或标注未知时，必须在 JSON 中保留未知，不得补造实时数据。",
+        json.dumps(context, ensure_ascii=False, indent=2),
+        "",
+        "请直接输出严格 JSON。操作建议需要结合当前数据的确定性和缺失项给出条件化表达，情景概率合计应为 100%。",
+    ])
+
+
+def _validate_structured_json_report(content: str) -> str | None:
+    """Return an error message when an LLM response violates the JSON contract."""
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return "JSON 复盘模板返回内容不是合法 JSON，请重试"
+    if not isinstance(payload, dict):
+        return "JSON 复盘模板必须返回对象，请重试"
+    required = {"核心矛盾解读", "操作建议", "情景推演"}
+    if set(payload) != required:
+        return "JSON 复盘模板顶级键不符合要求，请重试"
+    return None
 
 
 # ================================================================
@@ -179,9 +324,20 @@ def _build_emotion_block(overview: dict) -> str:
     return "\n".join(lines)
 
 
-def _build_user_prompt(overview: dict, news: list[dict], focus: str, lhb_context: str = "",
-                       bench_context: str = "") -> str:
+def _build_user_prompt(
+    overview: dict,
+    news: list[dict],
+    focus: str,
+    lhb_context: str = "",
+    bench_context: str = "",
+    report_template: Literal["default", "structured_json"] = "default",
+    report_type: str = "",
+    forecast_title: str = "",
+) -> str:
     """构建用户消息:复盘日期 + 市场数据精简切片 + 龙虎榜(可选) + 盘前风向标(可选) + 新闻 + 关注点。"""
+    if report_template == "structured_json":
+        return _build_structured_json_prompt(overview, report_type, forecast_title)
+
     as_of = overview.get("as_of") or "今日"
 
     parts: list[str] = [
@@ -281,6 +437,9 @@ async def recap_market_stream(
     as_of: date | None = None,
     focus: str = "",
     news: list[dict] | None = None,
+    report_template: Literal["default", "structured_json"] = "default",
+    report_type: str = "",
+    forecast_title: str = "",
 ) -> AsyncIterator[str]:
     """流式大盘复盘:yield 出每个 NDJSON 事件。
 
@@ -290,6 +449,9 @@ async def recap_market_stream(
         as_of: 复盘日期,None 取最新有数据日。
         focus: 用户追加的复盘关注点。
         news: 预检索的新闻列表(P1 不传,留 None 走降级说明;P3 由 news_search 注入)。
+        report_template: 复盘模板标识。
+        report_type: JSON 模板的报告类型。
+        forecast_title: JSON 模板的情景推演标题。
     """
     # 1. 装配市场总览
     overview = build_market_overview(repo, quote_service, depth_service, as_of)
@@ -311,26 +473,44 @@ async def recap_market_stream(
         "emotion_score": emo.get("score", 50),
         "emotion_label": emo.get("label", "—"),
         "summary": _recap_summary(overview),
+        "report_template": report_template,
+        "report_type": report_type,
+        "forecast_title": forecast_title,
     }, ensure_ascii=False)
 
     # 3+4. 构建 prompt + 流式调用 LLM(整体 try-except,任何异常 yield error,避免前端卡死)
     try:
-        from app.services.ai_provider import stream_ai_text
-
         # 龙虎榜摘要 (fuyao 专有): 拉取失败/未配置 → 空串, 复盘主流程不受影响
+        from app.services import auction_benchmark as auction_benchmark_svc
         from app.services import dragon_tiger as dragon_tiger_svc
+        from app.services.ai_provider import stream_ai_text
 
         lhb_ctx = dragon_tiger_svc.build_recap_context(repo.store.data_dir)
 
         # 盘前风向标摘要 (fuyao 专有): 失败/未配置 → 空串
-        from app.services import auction_benchmark as auction_benchmark_svc
-
         bench_ctx = auction_benchmark_svc.build_recap_context(repo.store.data_dir)
-        user_prompt = _build_user_prompt(overview, news or [], focus, lhb_ctx, bench_ctx)
+        user_prompt = _build_user_prompt(
+            overview,
+            news or [],
+            focus,
+            lhb_ctx,
+            bench_ctx,
+            report_template,
+            report_type,
+            forecast_title,
+        )
         got_content = False
+        content_parts: list[str] = []
         async for delta in stream_ai_text(
             [
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {
+                    "role": "system",
+                    "content": (
+                        _STRUCTURED_JSON_SYSTEM_PROMPT
+                        if report_template == "structured_json"
+                        else _SYSTEM_PROMPT
+                    ),
+                },
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.5,
@@ -339,9 +519,15 @@ async def recap_market_stream(
             prefer_final_answer=True,
         ):
             got_content = True
+            content_parts.append(delta)
             yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)
 
-    except Exception as e:  # noqa: BLE001
+        if report_template == "structured_json":
+            validation_error = _validate_structured_json_report("".join(content_parts).strip())
+            if validation_error:
+                yield json.dumps({"type": "error", "message": validation_error}, ensure_ascii=False)
+                return
+    except Exception as e:
         logger.exception("AI market recap failed for %s: %s", as_of_str, e)
         yield json.dumps({"type": "error", "message": f"AI 复盘失败: {e}"}, ensure_ascii=False)
         return
@@ -360,6 +546,9 @@ async def recap_market_once(
     as_of: date | None = None,
     focus: str = "",
     news: list[dict] | None = None,
+    report_template: Literal["default", "structured_json"] = "default",
+    report_type: str = "",
+    forecast_title: str = "",
 ) -> tuple[str | None, dict]:
     """非流式版本(供定时任务调用):累积全部 delta,返回 (content, meta)。
 
@@ -368,10 +557,20 @@ async def recap_market_once(
     """
     content_parts: list[str] = []
     meta: dict = {"as_of": as_of.isoformat() if as_of else None}
-    async for evt in recap_market_stream(repo, quote_service, depth_service, as_of, focus, news):
+    async for evt in recap_market_stream(
+        repo,
+        quote_service,
+        depth_service,
+        as_of,
+        focus,
+        news,
+        report_template,
+        report_type,
+        forecast_title,
+    ):
         try:
             obj = json.loads(evt)
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
         t = obj.get("type")
         if t == "meta":

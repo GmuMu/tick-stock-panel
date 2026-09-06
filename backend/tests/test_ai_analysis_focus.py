@@ -1,11 +1,17 @@
 """AI 分析关注重点的统一 Prompt 契约测试。"""
 
+import json
+
 from app.services.ai_provider import build_focus_instruction, sanitize_focus
 from app.services.concept_rotation_analyzer import (
     _build_user_prompt as build_rotation_user_prompt,
 )
 from app.services.financial_analyzer import (
     _build_user_prompt as build_financial_user_prompt,
+)
+from app.services.market_recap import (
+    _build_structured_json_prompt,
+    _validate_structured_json_report,
 )
 from app.services.market_recap import (
     _build_user_prompt as build_recap_user_prompt,
@@ -60,3 +66,44 @@ def test_empty_focus_does_not_add_focus_section() -> None:
     ]
 
     assert all("用户关注重点" not in prompt for prompt in prompts)
+
+
+def test_structured_recap_prompt_preserves_requested_json_contract() -> None:
+    overview = {
+        "indices": [
+            {"name": "上证指数", "last_price": 3200.12, "change_pct": -1.25},
+        ],
+        "breadth": {"up_pct": 36.5},
+        "amount": {"total": 3.17e12},
+        "activity": {"avg_turnover": 1.82},
+        "trend": {"above_ma60_pct": 48.0},
+        "emotion": {"score": 42, "label": "偏冷"},
+        "concept_rank": {
+            "leading": [{"name": "半导体"}],
+            "lagging": [{"name": "银行"}],
+        },
+        "industry_rank": {"leading": [], "lagging": []},
+        "limit": {"limit_up": 52, "broken": 21, "max_boards": 6},
+    }
+
+    prompt = _build_structured_json_prompt(
+        overview,
+        "A股量价背离复盘",
+        "明日走势推演",
+    )
+
+    assert "报告类型: A股量价背离复盘" in prompt
+    assert "推演标题: 明日走势推演" in prompt
+    assert '"主力与散户行为": "主力净流入未知' in prompt
+    context = json.loads(prompt[prompt.index("{"):prompt.index("\n\n请直接输出")])
+    assert context["板块热力"]["当前最强板块"] == ["半导体"]
+    assert "请直接输出严格 JSON" in prompt
+
+
+def test_structured_recap_report_validator_requires_exact_top_level_keys() -> None:
+    valid = '{"核心矛盾解读": {}, "操作建议": {}, "情景推演": {}}'
+    invalid = '{"核心矛盾解读": {}, "操作建议": {}}'
+
+    assert _validate_structured_json_report(valid) is None
+    assert _validate_structured_json_report(invalid)
+    assert _validate_structured_json_report("```json\n{}\n```")

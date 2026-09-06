@@ -74,6 +74,9 @@ export function Review() {
   // 复盘日期:当前固定取最新交易日(后续如需日期选择可改回 useState)
   const asOf: string | undefined = undefined
   const [focus, setFocus] = useState('')
+  const [reportTemplate, setReportTemplate] = useState<'default' | 'structured_json'>('default')
+  const [reportType, setReportType] = useState('A股市场量价矛盾复盘')
+  const [forecastTitle, setForecastTitle] = useState('明日走势推演')
   // 生成状态走全局 store:切走页面流不中断,回来可恢复
   const { phase, content, error, meta } = useReviewState()
   const [viewing, setViewing] = useState<AiReviewReport | null>(null)  // 查看历史报告
@@ -160,7 +163,15 @@ export function Review() {
   }, [phase, viewing])
 
   // 自动归档(生成完成后台静默保存)—— 通过回调注入 store,避免 store 直接依赖 qc/marketQuery
-  const onGenerationDone = useCallback(async (fullContent: string, doneMeta: { as_of?: string; summary?: string; emotion_score?: number; emotion_label?: string } | null) => {
+  const onGenerationDone = useCallback(async (fullContent: string, doneMeta: {
+    as_of?: string
+    summary?: string
+    emotion_score?: number
+    emotion_label?: string
+    report_template?: 'default' | 'structured_json'
+    report_type?: string
+    forecast_title?: string
+  } | null) => {
     const reportAsOf = doneMeta?.as_of ?? marketQuery.data?.as_of ?? asOf ?? new Date().toISOString().slice(0, 10)
     try {
       await api.reviewReportSave({
@@ -170,20 +181,23 @@ export function Review() {
         summary: doneMeta?.summary,
         emotion_score: doneMeta?.emotion_score ?? null,
         emotion_label: doneMeta?.emotion_label ?? '',
+        report_template: doneMeta?.report_template ?? reportTemplate,
+        report_type: doneMeta?.report_type ?? reportType,
+        forecast_title: doneMeta?.forecast_title ?? forecastTitle,
       })
       qc.invalidateQueries({ queryKey: QK.reviewReports })
     } catch { /* 静默 */ }
-  }, [focus, asOf, marketQuery.data, qc])
+  }, [focus, reportTemplate, reportType, forecastTitle, asOf, marketQuery.data, qc])
 
   // 主流程:生成复盘(委托给全局 store,流在后台独立运行)
   const generate = useCallback(() => {
     if (isReviewGenerating()) return
     setViewing(null)
     resetReview()
-    startReviewGeneration(asOf, focus, (full, doneMeta) => {
+    startReviewGeneration(asOf, focus, reportTemplate, reportType, forecastTitle, (full, doneMeta) => {
       onGenerationDone(full, doneMeta).catch(() => { /* 静默 */ })
     })
-  }, [asOf, focus, onGenerationDone])
+  }, [asOf, focus, reportTemplate, reportType, forecastTitle, onGenerationDone])
 
   // 复制全文到剪贴板(viewing 优先,与主区域显示一致)
   const copyContent = useCallback(async () => {
@@ -312,6 +326,45 @@ export function Review() {
               {/* ===== 龙虎榜 (fuyao 专有, 资金动向上下文; 复盘日联动) ===== */}
               <DragonTigerCard date={dtDate} onOpenStock={setPreviewSymbol} />
 
+              {/* ===== 复盘模板 ===== */}
+              <div className="rounded-card border border-border bg-surface/80 px-3.5 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] font-medium text-foreground">复盘模板</span>
+                  <select
+                    value={reportTemplate}
+                    onChange={(e) => setReportTemplate(e.target.value as 'default' | 'structured_json')}
+                    disabled={isGenerating}
+                    className="h-8 rounded-btn border border-border bg-base px-2.5 text-xs text-foreground outline-none focus:border-accent disabled:opacity-50"
+                  >
+                    <option value="default">默认客观 Markdown</option>
+                    <option value="structured_json">量价矛盾 JSON 推演</option>
+                  </select>
+                  {reportTemplate === 'structured_json' && (
+                    <>
+                      <input
+                        value={reportType}
+                        onChange={(e) => setReportType(e.target.value)}
+                        disabled={isGenerating}
+                        placeholder="报告类型"
+                        className="h-8 min-w-52 flex-1 rounded-btn border border-border bg-base px-2.5 text-xs text-foreground outline-none placeholder:text-muted/60 focus:border-accent disabled:opacity-50"
+                      />
+                      <input
+                        value={forecastTitle}
+                        onChange={(e) => setForecastTitle(e.target.value)}
+                        disabled={isGenerating}
+                        placeholder="推演标题"
+                        className="h-8 min-w-52 flex-1 rounded-btn border border-border bg-base px-2.5 text-xs text-foreground outline-none placeholder:text-muted/60 focus:border-accent disabled:opacity-50"
+                      />
+                    </>
+                  )}
+                </div>
+                {reportTemplate === 'structured_json' && (
+                  <p className="mt-2 text-[10px] leading-relaxed text-muted">
+                    只输出“核心矛盾解读 / 操作建议 / 情景推演”三个顶级键；当前总览未提供的资金、融资和 ETF 实时字段会明确标注为未知。
+                  </p>
+                )}
+              </div>
+
               {/* ===== 关注点输入 ===== */}
               <div className="flex items-center gap-2 rounded-card border border-border bg-surface/80 px-3.5 py-2.5 transition-colors focus-within:border-accent/40">
                 <Wand2 className="h-3.5 w-3.5 shrink-0 text-accent" />
@@ -335,6 +388,7 @@ export function Review() {
                   error={error}
                   isGenerating={isGenerating}
                   viewing={viewing}
+                  reportTemplate={viewing?.report_template ?? meta?.report_template ?? reportTemplate}
                   onCopy={copyContent}
                   onDownload={downloadContent}
                   onRegenerate={generate}
@@ -620,13 +674,14 @@ function MarketSummaryBar({ data }: { data: OverviewMarket }) {
 // 报告面板(流式 + 错误 + 历史/完成态)
 // ================================================================
 function ReportPanel({
-  phase, content, error, isGenerating, viewing, onCopy, onDownload, onRegenerate, reportEndRef,
+  phase, content, error, isGenerating, viewing, reportTemplate, onCopy, onDownload, onRegenerate, reportEndRef,
 }: {
   phase: ReviewPhase
   content: string
   error: string
   isGenerating: boolean
   viewing: AiReviewReport | null
+  reportTemplate: 'default' | 'structured_json'
   onCopy: () => void
   onDownload: () => void
   onRegenerate: () => void
@@ -736,7 +791,13 @@ function ReportPanel({
           </div>
         ) : (
           <div className="prose prose-invert max-w-none">
-            <MarkdownRenderer content={content} />
+            {reportTemplate === 'structured_json' ? (
+              <pre className="whitespace-pre-wrap break-words rounded-btn bg-base/70 p-4 font-mono text-xs leading-relaxed text-secondary">
+                {formatStructuredJson(content)}
+              </pre>
+            ) : (
+              <MarkdownRenderer content={content} />
+            )}
             {showCursor && (
               <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse rounded-sm bg-accent align-middle" />
             )}
@@ -746,6 +807,14 @@ function ReportPanel({
       </div>
     </motion.div>
   )
+}
+
+function formatStructuredJson(content: string): string {
+  try {
+    return JSON.stringify(JSON.parse(content), null, 2)
+  } catch {
+    return content
+  }
 }
 
 // ================================================================

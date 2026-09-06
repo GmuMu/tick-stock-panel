@@ -17,6 +17,9 @@
   "summary": "三大指数齐涨...",  # 一句话摘要
   "emotion_score": 68,        # 情绪分(0-100, 复盘生成时的市场情绪雷达均分)
   "emotion_label": "偏暖",     # 情绪标签(强势/偏暖/震荡/偏冷/冰点)
+  "report_template": "default", # default / structured_json
+  "report_type": "",           # JSON 模板的报告类型
+  "forecast_title": "",        # JSON 模板的推演标题
   "created_at": "2026-06-27T15:35:00"
 }
 """

@@ -19,6 +19,9 @@ export interface ReviewMeta {
   emotion_score?: number
   emotion_label?: string
   summary?: string
+  report_template?: 'default' | 'structured_json'
+  report_type?: string
+  forecast_title?: string
 }
 
 export interface ReviewState {
@@ -75,6 +78,9 @@ export function isReviewGenerating(): boolean {
 export async function startReviewGeneration(
   asOf: string | undefined,
   focus: string,
+  reportTemplate: 'default' | 'structured_json' = 'default',
+  reportType = '',
+  forecastTitle = '',
   onDone?: (fullContent: string, meta: ReviewMeta | null) => void,
 ): Promise<void> {
   // 已在生成中,不重复启动
@@ -90,7 +96,13 @@ export async function startReviewGeneration(
   let doneMeta: ReviewMeta | null = null
 
   try {
-    for await (const evt of api.reviewStream(asOf, focus)) {
+    for await (const evt of api.reviewStream(
+      asOf,
+      focus,
+      reportTemplate,
+      reportType,
+      forecastTitle,
+    )) {
       if (abortCtrl.signal.aborted) break
       if (evt.type === 'meta') {
         doneMeta = evt
@@ -143,6 +155,9 @@ export function setViewingReport(report: {
   emotion_score?: number | null
   emotion_label?: string
   summary?: string
+  report_template?: 'default' | 'structured_json'
+  report_type?: string
+  forecast_title?: string
 }): void {
   abortCtrl?.abort()
   abortCtrl = null
@@ -155,6 +170,9 @@ export function setViewingReport(report: {
       emotion_score: report.emotion_score ?? undefined,
       emotion_label: report.emotion_label,
       summary: report.summary,
+      report_template: report.report_template,
+      report_type: report.report_type,
+      forecast_title: report.forecast_title,
     },
     focus: state.focus,
   }

@@ -655,6 +655,9 @@ export interface AiReviewReport {
   summary?: string
   emotion_score?: number | null
   emotion_label?: string
+  report_template?: 'default' | 'structured_json'
+  report_type?: string
+  forecast_title?: string
   created_at: string
 }
 
@@ -3497,6 +3500,8 @@ export const api = {
   reviewReportSave: (r: {
     as_of: string; focus?: string; content: string
     summary?: string; emotion_score?: number | null; emotion_label?: string
+    report_template?: 'default' | 'structured_json'
+    report_type?: string; forecast_title?: string
   }) =>
     request<{ ok: boolean; report: AiReviewReport }>('/api/market-recap/reports', {
       method: 'POST', body: JSON.stringify(r),
@@ -3509,19 +3514,34 @@ export const api = {
    * AI 大盘复盘 — 流式调用(NDJSON,与个股/财务分析同协议)。
    * meta 里带 as_of / emotion_score / emotion_label / summary,供前端先渲染信号灯。
    */
-  async *reviewStream(asOf?: string, focus?: string): AsyncGenerator<{
+  async *reviewStream(
+    asOf?: string,
+    focus?: string,
+    reportTemplate: 'default' | 'structured_json' = 'default',
+    reportType = '',
+    forecastTitle = '',
+  ): AsyncGenerator<{
     type: 'meta' | 'delta' | 'error' | 'done'
     as_of?: string
     emotion_score?: number
     emotion_label?: string
     summary?: string
+    report_template?: 'default' | 'structured_json'
+    report_type?: string
+    forecast_title?: string
     content?: string
     message?: string
   }> {
     const res = await fetch('/api/market-recap/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ as_of: asOf ?? null, focus: focus ?? '' }),
+      body: JSON.stringify({
+        as_of: asOf ?? null,
+        focus: focus ?? '',
+        report_template: reportTemplate,
+        report_type: reportType,
+        forecast_title: forecastTitle,
+      }),
     })
     if (!res.ok) {
       let detail = ''
