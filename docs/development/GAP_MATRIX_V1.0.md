@@ -141,23 +141,23 @@
 
 | Task | 状态 | 真实证据 / 入口 | 下一步 |
 | --- | --- | --- | --- |
-| TASK-1301 | PARTIAL | `dev.ps1`、Docker、数据目录和认证配置已存在 | 补 backup/restore 演练，不把 data 纳入 Git |
-| TASK-1302 | PARTIAL | 日志、任务记录、SSE 和数据状态 API 已存在 | 统一 metrics、事件 correlation id 和敏感信息过滤 |
-| TASK-1303 | PARTIAL | 访问认证、Key 脱敏、插件失败隔离已存在 | 补 secret rotation、最小权限和外部 Agent 边界 |
-| TASK-1304 | PARTIAL | `docs/deployment.md` 与启动脚本已存在 | 补回滚、数据恢复、迁移和发布检查清单 |
+| TASK-1301 | DONE | `services/backup.py`、`scripts/backup_restore.py`、`tests/test_phase13_operations.py` | 原子 ZIP manifest/SHA-256 校验；恢复需本地显式确认并保留回滚目录 |
+| TASK-1302 | DONE | `observability.py`、HTTP middleware、`/api/ops/metrics`、`tests/test_phase13_operations.py` | 已统一 correlation id、有限路由 metrics、错误摘要和日志脱敏 |
+| TASK-1303 | DONE | `secrets_store.py` rotation metadata、`/api/ops/security/secrets/*`、Agent permissions | 密钥轮换仅返回元数据；外部 Agent 默认只读；真实 QMT 仍关闭 |
+| TASK-1304 | DONE | `docs/deployment.md`、`TASK-1304-release-runbook.md`、备份 CLI | 已补升级、迁移、恢复、回滚、构建和 smoke checklist |
 
 ## Phase 14：Research Adapter 与 ML
 
 | Task | 状态 | 真实证据 / 入口 | 下一步 |
 | --- | --- | --- | --- |
-| TASK-1401 | GAP | 未发现独立 research adapter contract | 依赖 Unified Signal，先定义只读 research boundary |
-| TASK-1402 | GAP | 未发现 QuantMind adapter | 依赖 1401，禁止影响 OMS/QMT 路径 |
-| TASK-1403 | GAP | 未发现 ML signal lifecycle | 依赖 1402，必须走统一 Signal/Decision/Risk 生命周期 |
-| TASK-1404 | GAP | 未发现 research isolation 测试 | 依赖 1403，验证研究代码不能改变交易状态 |
+| TASK-1401 | DONE | `research/contract.py` 定义版本化 `ResearchArtifact` 与只读 `ResearchAdapter` | 外部研究结果必须携带 symbol/as-of/provenance/fingerprint |
+| TASK-1402 | DONE | `research/quantmind.py`、`/api/research/quantmind` 提供本地 JSON handoff | 当前为无网络本地适配；真实 QuantMind 网络连接需另行安全评审 |
+| TASK-1403 | DONE | `research/ml_signal.py`、`/api/research/ml/signals` 接入 `UnifiedSignal(source=ml)` | ML 只写 Signal，不创建订单、不绕过 Decision/Risk |
+| TASK-1404 | DONE | `tests/test_phase14_research_ml.py` 验证 research/ML 与 OMS/Broker 隔离 | 研究文件独立存储并纳入运行数据备份 |
 
 ## 执行结论
 
-1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0205`、`TASK-0301` 至 `TASK-0304`、`TASK-0401` 至 `TASK-0405`、Phase 5 `TASK-0501` 至 `TASK-0504`、Phase 9 `TASK-0901` 至 `TASK-0903`、Phase 10 `TASK-1001` 至 `TASK-1005` 和 Phase 11 `TASK-1101` 至 `TASK-1106` 已完成当前阶段的 mock-safe 契约，当前分支为 `feat/0301-indicator-spec`；Sequoia-X 的 `PrivatePlacement` 因公司行为数据缺口暂不实现。
+1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0205`、`TASK-0301` 至 `TASK-0304`、`TASK-0401` 至 `TASK-0405`、Phase 5 `TASK-0501` 至 `TASK-0504`、Phase 9 `TASK-0901` 至 `TASK-0903`、Phase 10 `TASK-1001` 至 `TASK-1005`、Phase 11 `TASK-1101` 至 `TASK-1106`、Phase 12 `TASK-1201` 至 `TASK-1203`、Phase 13 `TASK-1301` 至 `TASK-1304` 和 Phase 14 `TASK-1401` 至 `TASK-1404` 已完成当前阶段的 mock-safe/operations/research 契约，当前分支为 `feat/0301-indicator-spec`；Sequoia-X 的 `PrivatePlacement` 因公司行为数据缺口暂不实现。
 2. `full_minute` YAML 解析断点仍是已确认缺口，依赖它的自定义全量分钟任务不得宣称端到端完成。
-3. Phase 9/10/11/12-1201/1202/1203 已完成当前的 paper/mock/isolated-agent 安全契约，但真实 QMT SDK、网络行情、真实账户和实盘仍保持关闭；TASK-1204 继续阻塞，当前禁止自动交易。
+3. Phase 9/10/11/12-1201/1202/1203、Phase 13 和 Phase 14 已完成当前的 paper/mock/isolated-agent/operations/research 契约，但真实 QMT SDK、网络行情、真实账户和实盘仍保持关闭；TASK-1204 继续阻塞，当前禁止自动交易。
 4. 以后每个 Task 必须先补契约测试，再实现代码；完成后更新对应 `docs/tasks/TASK-xxxx-*.md`，不以“页面能打开”代替验收。

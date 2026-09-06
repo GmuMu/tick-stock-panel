@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -27,6 +28,8 @@ from app.api import (
     lots,
     market_recap,
     mining,
+    ops,
+    research,
     monitor_rules,
     overview,
     paper_trading,
@@ -51,18 +54,30 @@ from app.extensions.loader import (
     start_backend_extensions,
 )
 from app.jobs import daily_pipeline
+from app.observability import (
+    CORRELATION_HEADER,
+    RedactionFilter,
+    metrics,
+    new_correlation_id,
+    reset_correlation_id,
+    set_correlation_id,
+)
 from app.services.matrix_prewarm_owner import MatrixCachePrewarmOwner
 from app.services.mining_process_lock import MiningProcessLock
 from app.services.quote_service import QuoteService
 from app.tickflow import client as tf_client
+from app.tickflow.capabilities import CapabilityDenied
 from app.tickflow.policy import detect_capabilities
 from app.tickflow.repository import DataStore, KlineRepository
 
 logging.basicConfig(
     level=settings.log_level,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    format="%(asctime)s [%(levelname)s] [corr=%(correlation_id)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+_redaction_filter = RedactionFilter()
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(_redaction_filter)
 
 # 追加文件日志: uvicorn (含 --reload 开发模式) 默认只有 StreamHandler, 同步/管道等
 # 运行时日志仅出现在 dev 终端, 关掉或滚屏后即丢失, 排查「同步后日志没落」时无处可查。
@@ -80,8 +95,12 @@ if not getattr(sys, "frozen", False):
             mode="a", encoding="utf-8", errors="replace",
         )
         _file_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+            logging.Formatter(
+                "%(asctime)s [%(levelname)s] [corr=%(correlation_id)s] "
+                "%(name)s: %(message)s"
+            )
         )
+        _file_handler.addFilter(_redaction_filter)
         logging.getLogger().addHandler(_file_handler)
     except Exception as _e:  # noqa: BLE001
         logger.warning("文件日志初始化失败, 仅输出到终端: %s", _e)
@@ -458,6 +477,31 @@ async def auth_middleware(request: Request, call_next):
     return JSONResponse(status_code=401, content={"detail": "未登录或会话已过期"})
 
 
+@app.middleware("http")
+async def observability_middleware(request: Request, call_next):
+    """Attach a bounded correlation ID and record every HTTP request."""
+    correlation_id = new_correlation_id(request.headers.get(CORRELATION_HEADER))
+    token = set_correlation_id(correlation_id)
+    started = time.perf_counter()
+    response = None
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        metrics.observe(
+            request.method,
+            request.url.path,
+            status_code,
+            (time.perf_counter() - started) * 1000,
+            correlation_id,
+        )
+        if response is not None:
+            response.headers[CORRELATION_HEADER] = correlation_id
+        reset_correlation_id(token)
+
+
 # 路由
 app.include_router(core_router)
 app.include_router(auth_api.router)
@@ -471,6 +515,8 @@ app.include_router(indices.router)
 app.include_router(overview.router)
 app.include_router(abnormal.router)
 app.include_router(broker.router)
+app.include_router(ops.router)
+app.include_router(research.router)
 app.include_router(regime.router)
 app.include_router(analysis.router)
 app.include_router(pipeline.router)
@@ -498,11 +544,6 @@ app.state.extension_load_errors = extension_load_errors
 # 能力门控异常 → 403(而非默认 500)
 # 业务代码用 capset.require(Cap.X) 断言能力,缺失时抛 CapabilityDenied;
 # 若不注册 handler 会冒泡成 500 Internal Server Error,对前端不友好且语义错误。
-from fastapi import Request
-from fastapi.responses import JSONResponse
-from app.tickflow.capabilities import CapabilityDenied
-
-
 @app.exception_handler(CapabilityDenied)
 async def capability_denied_handler(request: Request, exc: CapabilityDenied) -> JSONResponse:
     return JSONResponse(

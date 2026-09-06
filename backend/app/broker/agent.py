@@ -12,15 +12,31 @@ from typing import Any
 
 from app.broker.protocol import BrokerAdapter, BrokerError, OrderRequest
 
+READ_ONLY_AGENT_ACTIONS = frozenset({
+    "connect", "disconnect", "status", "quote", "orders", "fills", "account",
+})
+FULL_AGENT_ACTIONS = READ_ONLY_AGENT_ACTIONS | frozenset({"submit_order", "cancel_order"})
+
 
 class QmtAgentCore:
     """Command dispatcher that can be hosted in a separate process."""
 
-    def __init__(self, adapter: BrokerAdapter) -> None:
+    def __init__(
+        self,
+        adapter: BrokerAdapter,
+        *,
+        allowed_actions: frozenset[str] | None = None,
+    ) -> None:
         self.adapter = adapter
+        self.allowed_actions = allowed_actions or READ_ONLY_AGENT_ACTIONS
 
     def dispatch(self, command: dict[str, Any]) -> dict[str, Any]:
         action = str(command.get("action") or "").lower()
+        if action not in self.allowed_actions:
+            raise BrokerError(
+                f"Agent 权限不足: {action}",
+                code="AGENT_PERMISSION_DENIED",
+            )
         if action == "connect":
             return {"ok": True, "result": self.adapter.connect().to_dict()}
         if action == "disconnect":
@@ -57,4 +73,9 @@ def run_stdio_agent(core: QmtAgentCore) -> None:
 
 
 def agent_metadata() -> dict[str, Any]:
-    return {"pid": os.getpid(), "transport": "stdio-jsonl", "vendor_sdk_loaded": False}
+    return {
+        "pid": os.getpid(),
+        "transport": "stdio-jsonl",
+        "vendor_sdk_loaded": False,
+        "default_permission": "read_only",
+    }

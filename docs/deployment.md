@@ -185,3 +185,51 @@ ssh -L 3018:127.0.0.1:3018 root@123.45.67.89
 - **本机/内网如何判断?** 后端检查客户端 IP 是否属于 `127.0.0.1 / ::1 / 10.x / 192.168.x / 172.16-31.x`。
 - **SSH 转发为什么有效?** `-L` 把本机端口通过 SSH 隧道转发到服务器的 `127.0.0.1`,等同于在服务器本地访问,客户端 IP 变成 `127.0.0.1`,通过校验。
 - **反向代理注意:** 若面板在 Nginx 等反代之后,需正确配置 `X-Forwarded-For` 头,后端据此取真实客户端 IP。
+
+## 运行数据备份与恢复
+
+运行数据不在 Git 中。升级、迁移或进行高风险维护前,先停止写入任务并创建
+带 manifest 和 SHA-256 校验的备份:
+
+```bash
+cd backend
+uv run python scripts/backup_restore.py create --label before-upgrade
+uv run python scripts/backup_restore.py list
+```
+
+恢复前先做只读校验。默认的 `restore` 命令不会覆盖数据;只有明确传入
+`--confirm` 才会执行替换:
+
+```bash
+uv run python scripts/backup_restore.py validate ../data/user_data/backups/<archive>.zip
+uv run python scripts/backup_restore.py restore ../data/user_data/backups/<archive>.zip
+uv run python scripts/backup_restore.py restore ../data/user_data/backups/<archive>.zip --confirm
+```
+
+执行确认恢复前必须停止服务。程序会先把当前 `data/` 重命名为
+`data.pre-restore-<timestamp>/`,再切换校验过的内容;若启动检查失败,可停服后
+删除新 `data/` 并将该回滚目录改回 `data/`。不要使用 `git clean -fdx` 清理运行数据。
+
+## 运维检查接口
+
+已登录后可通过以下接口检查运行状态:
+
+- `GET /api/ops/metrics`: 请求总数、状态码、有限路由延迟和最近服务端错误。
+- `GET /api/ops/backups`: 列出备份及其 manifest 校验状态。
+- `POST /api/ops/backups`: 创建备份,请求体为 `{"label":"before-upgrade"}`。
+- `GET /api/ops/security/secrets`: 只返回密钥配置状态、版本、时间和指纹。
+- `POST /api/ops/security/secrets/rotate`: 轮换一个已支持的密钥字段,响应不包含明文。
+
+每个 HTTP 响应带 `X-Correlation-ID`;排查问题时应同时记录该值和后端日志。
+metrics 是进程内计数器,重启后清零,不能代替多实例监控系统。
+
+## 发布与回滚清单
+
+1. 确认 `git status` 干净,核对目标提交和 `.env`/`data/` 不会进入 Git。
+2. 创建并校验 `before-release` 备份,确认备份文件位于 `data/user_data/backups/`。
+3. 执行后端定向测试、`uv run python -m compileall app` 和前端 `pnpm build`。
+4. Docker 发布执行 `docker compose build` 后再 `docker compose up -d`。
+5. 启动后检查 `/health`、登录、`/api/ops/metrics` 和关键页面。
+6. 运行一次只读对账和 `LIVE_SHADOW` 验收;真实 QMT、真实行情和真实下单仍保持关闭。
+7. 若升级失败,停服、保留失败日志,按上面的 `restore --confirm` 回滚,再重新执行启动和 smoke 检查。
+8. 记录提交号、备份文件名、回滚目录和 `X-Correlation-ID`,形成发布审计记录。

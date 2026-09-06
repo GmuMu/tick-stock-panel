@@ -38,7 +38,7 @@ def _write_error(exc: Exception) -> HTTPException:
 class SignalIn(BaseModel):
     symbol: str = Field(min_length=1, max_length=32)
     as_of: str = Field(min_length=1, max_length=40)
-    source: Literal["strategy", "indicator", "custom", "monitor", "manual"]
+    source: Literal["strategy", "indicator", "custom", "monitor", "manual", "ml"]
     source_id: str = Field(min_length=1, max_length=160)
     kind: Literal["entry", "exit", "observation"] = "observation"
     action: str = Field(min_length=1, max_length=80)
@@ -49,7 +49,7 @@ class SignalIn(BaseModel):
 
 
 class SignalAdaptIn(BaseModel):
-    source: Literal["strategy", "indicator", "custom", "monitor", "manual"]
+    source: Literal["strategy", "indicator", "custom", "monitor", "manual", "ml"]
     source_id: str = Field(min_length=1, max_length=160)
     symbol: str = Field(min_length=1, max_length=32)
     as_of: str = Field(min_length=1, max_length=40)

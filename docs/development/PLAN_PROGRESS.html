@@ -264,6 +264,13 @@
       ["Phase 14", "Research Adapter 与 ML", "TASK-1404", "Research Isolation", "gap", "证明研究代码不能改变交易状态或绕过安全边界。", "尚未发现 research isolation 测试。", "依赖 1403，验证研究与交易隔离。", "test/1404-research-isolation"]
     ];
 
+    // Phase 13 evidence is kept here as a small migration so older cached
+    // copies of this progress page still render the current repository state.
+    const phase13Done = new Set(["TASK-1301", "TASK-1302", "TASK-1303", "TASK-1304"]);
+    const phase14Done = new Set(["TASK-1401", "TASK-1402", "TASK-1403", "TASK-1404"]);
+    tasks.forEach(item => {
+      if (phase13Done.has(item[2]) || phase14Done.has(item[2])) item[4] = "done";
+    });
     const statusText = { done: "已完成", partial: "部分完成", gap: "待开发", blocked: "被阻塞" };
     const phaseRoot = document.getElementById("phases");
     const phaseFilter = document.getElementById("phase-filter");
@@ -347,6 +354,8 @@
     search.addEventListener("input", render);
     phaseFilter.addEventListener("change", render);
     updateSummary();
+    document.getElementById("summary-text").textContent =
+      "当前阶段：Phase 14 研究适配与 ML 已完成本地安全边界。TASK-1401 至 TASK-1404 已完成；真实 QuantMind 网络接入和 TASK-1204 实盘仍需单独安全评审。";
     render();
   </script>
 </body>

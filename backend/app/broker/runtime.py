@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.broker.adapters import QmtQuoteAdapter, QmtTradeAdapter, UnconfiguredQmtAdapter
-from app.broker.agent import QmtAgentCore, agent_metadata
+from app.broker.agent import FULL_AGENT_ACTIONS, QmtAgentCore, agent_metadata
 from app.broker.mock import MockBroker
 from app.broker.protocol import BrokerError, BrokerSafetyError, OrderRequest, utc_now
 from app.broker.reconcile import ReconcileService
@@ -24,7 +24,7 @@ class BrokerRuntime:
         self.data_dir = Path(data_dir)
         self.safety = SafetyController(self.data_dir)
         self.mock = MockBroker()
-        self.agent = QmtAgentCore(self.mock)
+        self.agent = QmtAgentCore(self.mock, allowed_actions=FULL_AGENT_ACTIONS)
         self.quote_adapter = QmtQuoteAdapter(self.agent)
         self.trade_adapter = QmtTradeAdapter(self.agent, self.safety)
         self.unconfigured_qmt = UnconfiguredQmtAdapter()

@@ -8,11 +8,16 @@ UI 改 Key 时只动这个文件,不动 .env。
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
+import re
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+_METADATA_KEY = "_metadata"
+_ROTATABLE_FIELD = re.compile(r"^[a-z0-9_]+(?:api_key|secret)$")
 
 
 def _path() -> Path:
@@ -35,7 +40,15 @@ def load() -> dict:
 def save(updates: dict) -> dict:
     """合并写入(不会清掉未提及的字段)。返回新内容。"""
     current = load()
+    metadata = current.get(_METADATA_KEY)
+    if not isinstance(metadata, dict):
+        metadata = {}
     current.update({k: v for k, v in updates.items() if v is not None})
+    for field, value in updates.items():
+        if is_rotatable_field(field) and value:
+            metadata[field] = _metadata_for(str(value), metadata.get(field))
+    if metadata:
+        current[_METADATA_KEY] = metadata
     p = _path()
     p.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
     try:
@@ -56,8 +69,69 @@ def clear(*keys: str) -> dict:
     current = load()
     for k in keys:
         current.pop(k, None)
+        if isinstance(current.get(_METADATA_KEY), dict):
+            current[_METADATA_KEY].pop(k, None)
     p.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
     return current
+
+
+def is_rotatable_field(field: str) -> bool:
+    """Return whether a field is a supported secret slot, without reading it."""
+    return bool(_ROTATABLE_FIELD.fullmatch(str(field)))
+
+
+def _metadata_for(value: str, previous: dict | None = None) -> dict:
+    old_version = int((previous or {}).get("version", 0) or 0)
+    return {
+        "version": old_version + 1,
+        "rotated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "fingerprint": hashlib.sha256(value.encode("utf-8")).hexdigest()[:16],
+    }
+
+
+def rotate(field: str, value: str) -> dict:
+    """Replace a secret and return non-sensitive rotation metadata only."""
+    if not is_rotatable_field(field):
+        raise ValueError("unsupported secret field")
+    value = str(value).strip()
+    if not value:
+        raise ValueError("secret value must not be empty")
+    current = load()
+    metadata = current.get(_METADATA_KEY)
+    metadata = metadata if isinstance(metadata, dict) else {}
+    previous = metadata.get(field)
+    item = _metadata_for(value, previous)
+    current[field] = value
+    current[_METADATA_KEY] = metadata
+    metadata[field] = item
+    p = _path()
+    p.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        os.chmod(p, 0o600)
+    except OSError:
+        pass
+    return {"field": field, **item, "masked": mask(value)}
+
+
+def list_metadata() -> list[dict]:
+    """List secret status without returning secret values."""
+    current = load()
+    saved = current.get(_METADATA_KEY)
+    saved = saved if isinstance(saved, dict) else {}
+    result: list[dict] = []
+    for field, value in sorted(current.items()):
+        if field == _METADATA_KEY or not is_rotatable_field(field):
+            continue
+        item = saved.get(field) if isinstance(saved.get(field), dict) else {}
+        result.append({
+            "field": field,
+            "configured": bool(value),
+            "masked": mask(str(value)),
+            "version": int(item.get("version", 1)),
+            "rotated_at": item.get("rotated_at"),
+            "fingerprint": item.get("fingerprint"),
+        })
+    return result
 
 
 def get_tickflow_key() -> str:

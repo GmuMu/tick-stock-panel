@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 SIGNAL_CONTRACT_VERSION = "1.0"
-SignalSource = Literal["strategy", "indicator", "custom", "monitor", "manual"]
+SignalSource = Literal["strategy", "indicator", "custom", "monitor", "manual", "ml"]
 SignalKind = Literal["entry", "exit", "observation"]
 
 
