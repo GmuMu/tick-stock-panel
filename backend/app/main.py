@@ -28,6 +28,7 @@ from app.api import (
     mining,
     monitor_rules,
     overview,
+    paper_trading,
     pipeline,
     regime,
     rps,
@@ -477,6 +478,7 @@ app.include_router(market_recap.router)
 app.include_router(settings_api.router)
 app.include_router(strategy.router)
 app.include_router(trading_research.router)
+app.include_router(paper_trading.router)
 app.include_router(signals.router)
 app.include_router(monitor_rules.router)
 app.include_router(lots.router)

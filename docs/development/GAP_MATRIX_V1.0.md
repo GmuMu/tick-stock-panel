@@ -103,19 +103,19 @@
 
 | Task | 状态 | 真实证据 / 入口 | 下一步 |
 | --- | --- | --- | --- |
-| TASK-0901 | PARTIAL | 自定义信号、内置信号、策略信号和监控事件分散存在 | 新增统一 Signal 只做适配层，不能改写现有信号语义 |
-| TASK-0902 | GAP | 未发现正式 paper execution loop 或 paper ledger | 依赖 0901、0804 与 OMS 前置约束 |
-| TASK-0903 | PARTIAL | 市场复盘、AI reports、market recap 已存在 | 先定义 review 输入和不可变快照 |
+| TASK-0901 | DONE | `strategy/unified_signal.py` 定义版本化 Signal、确定性 ID、策略/监控适配器；`paper-trading/signals` 持久化 | 保持适配层，不改写既有生产者语义 |
+| TASK-0902 | DONE | `TransactionStore.submit_paper_order/simulate_fill` 串起 Decision Gate、Risk、Paper OMS、模拟成交、Outbox 和 Position Projection；`paper-trading` API/页面可操作 | 仅 paper/mock，Phase 11 前不连接 Broker/QMT |
+| TASK-0903 | DONE | `daily_reviews` 保存按执行日的 Signal、Risk、订单、成交、持仓不可变快照；`paper-trading/reviews` 与页面可查看 | 后续可接入更丰富的 Review 分析，不改变快照语义 |
 
 ## Phase 10：Risk 与 OMS
 
 | Task | 状态 | 真实证据 / 入口 | 下一步 |
 | --- | --- | --- | --- |
-| TASK-1001 | GAP | 未发现正式 risk contract 或 risk engine | 依赖 Decision/Plan，先只做 fail-closed 规则协议 |
-| TASK-1002 | GAP | 未发现计划中的 risk rules registry | 依赖 1001 与市场规则 golden tests |
-| TASK-1003 | GAP | 未发现 OMS 状态机 | 依赖 transaction DB、risk contract 和统一事件 |
-| TASK-1004 | GAP | 未发现 idempotency/outbox 实现 | 依赖 1003，必须先定义唯一键和 crash recovery |
-| TASK-1005 | GAP | 未发现持仓 projection | 依赖 1003/1004，禁止从订单日志临时推导 UI 状态 |
+| TASK-1001 | DONE | `services/risk_engine.py` 提供版本化 `RiskDecision`、结构化拒绝码和 fail-closed 输入快照；`risk_checks` 表/API 审计 | 仅用于 paper loop，真实账户风险需后续对账后再扩展 |
+| TASK-1002 | DONE | 默认规则覆盖 Gate、计划有效期、价位关系、仓位/暴露、最小单位、T+1、涨跌停、行情质量和连续竞价 | 规则版本随市场规则变化显式升级 |
+| TASK-1003 | DONE | `paper_orders` 状态 `accepted/partially_filled/filled/cancelled/rejected`，剩余数量和成交边界受事务约束 | Broker 状态映射留给 Phase 11 |
+| TASK-1004 | DONE | `idempotency_keys`、唯一 `client_order_id`、同事务 Outbox、pending/sent/failed/attempts/error 与恢复 API | 不向外部 Webhook 或券商投递 |
+| TASK-1005 | DONE | `position_projection.py` 只消费 confirmed paper fill，独立 `positions` 表支持成本、可卖数量、实现盈亏和 T+1 settle | 后续对账必须以 projection 为消费边界 |
 
 ## Phase 11：Broker 与 QMT
 
@@ -157,7 +157,7 @@
 
 ## 执行结论
 
-1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0205`、`TASK-0301` 至 `TASK-0304`、`TASK-0401` 至 `TASK-0405` 和 Phase 5 `TASK-0501` 至 `TASK-0504` 已完成，当前分支为 `feat/0301-indicator-spec`；Sequoia-X 的 `PrivatePlacement` 因公司行为数据缺口暂不实现。
+1. `TASK-0101` 至 `TASK-0104`、`TASK-0201` 至 `TASK-0205`、`TASK-0301` 至 `TASK-0304`、`TASK-0401` 至 `TASK-0405`、Phase 5 `TASK-0501` 至 `TASK-0504`、Phase 9 `TASK-0901` 至 `TASK-0903` 和 Phase 10 `TASK-1001` 至 `TASK-1005` 已完成，当前分支为 `feat/0301-indicator-spec`；Sequoia-X 的 `PrivatePlacement` 因公司行为数据缺口暂不实现。
 2. `full_minute` YAML 解析断点仍是已确认缺口，依赖它的自定义全量分钟任务不得宣称端到端完成。
-3. 交易、OMS、QMT 和实盘相关任务全部保持 `GAP/BLOCKED`，在没有风险、幂等、审计和 Kill Switch 之前不接真实交易。
+3. Phase 9/10 已完成，但交易、QMT 和实盘相关任务仍保持 `GAP/BLOCKED`；当前 paper OMS 不具备真实下单能力，在没有 Broker、对账和 Kill Switch 之前不接真实交易。
 4. 以后每个 Task 必须先补契约测试，再实现代码；完成后更新对应 `docs/tasks/TASK-xxxx-*.md`，不以“页面能打开”代替验收。

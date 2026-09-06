@@ -982,6 +982,90 @@ export interface TradingResearchSummary {
   audit_events: number
 }
 
+export interface UnifiedSignal {
+  id: string
+  signal_id?: string
+  symbol: string
+  as_of: string
+  source: 'strategy' | 'indicator' | 'custom' | 'monitor' | 'manual' | string
+  source_id: string
+  kind: 'entry' | 'exit' | 'observation' | string
+  action: string
+  score?: number | null
+  payload: Record<string, unknown>
+  provenance: Record<string, unknown>
+  contract_version: string
+  created_at: string
+  updated_at: string
+}
+
+export interface RiskCheck {
+  id: string
+  plan_id: string
+  symbol: string
+  status: 'passed' | 'rejected' | string
+  passed: boolean | number
+  reasons: { code: string; message: string }[]
+  snapshot: Record<string, unknown>
+  contract_version: string
+  rules_version: string
+  evaluated_at: string
+}
+
+export interface PaperOrder {
+  id: string
+  client_order_id: string
+  plan_id: string
+  signal_id?: string | null
+  symbol: string
+  side: 'buy' | 'sell'
+  execution_date: string
+  order_type: string
+  quantity: number
+  limit_price: number
+  status: string
+  filled_quantity: number
+  avg_fill_price?: number | null
+  reject_reason?: string | null
+  revision: number
+  created_at: string
+  updated_at: string
+}
+
+export interface PaperFill {
+  id: string
+  order_id: string
+  symbol: string
+  side: 'buy' | 'sell'
+  quantity: number
+  price: number
+  trade_date: string
+  occurred_at: string
+  status: string
+}
+
+export interface PaperPosition {
+  symbol: string
+  quantity: number
+  available_quantity: number
+  avg_cost: number
+  realized_pnl: number
+  last_fill_id?: string | null
+  as_of: string
+  revision: number
+  updated_at: string
+}
+
+export interface PaperSummary {
+  signals: number
+  risk_checks: number
+  orders: number
+  fills: number
+  positions: number
+  outbox_pending: number
+  reviews: number
+}
+
 export interface WatchScope {
   contract_version: string
   scope_version: string
@@ -2695,6 +2779,31 @@ export const api = {
   tradingJournalCreate: (payload: Omit<JournalEntry, 'id' | 'revision' | 'created_at'> & { idempotency_key?: string }) =>
     request<{ item: JournalEntry }>('/api/trading-research/journal', { method: 'POST', body: JSON.stringify(payload) }),
   tradingAudit: () => request<{ items: Record<string, unknown>[] }>('/api/trading-research/audit'),
+
+  // 纸面交易闭环: 所有请求只写入本地 paper ledger, 不连接券商
+  paperSummary: () => request<PaperSummary>('/api/paper-trading/summary'),
+  paperSignals: () => request<{ items: UnifiedSignal[] }>('/api/paper-trading/signals'),
+  paperSignalCreate: (payload: Record<string, unknown>) =>
+    request<{ item: UnifiedSignal }>('/api/paper-trading/signals', { method: 'POST', body: JSON.stringify(payload) }),
+  paperRiskChecks: () => request<{ items: RiskCheck[] }>('/api/paper-trading/risk/checks'),
+  paperRiskCheck: (payload: { plan_id: string; snapshot: Record<string, unknown>; idempotency_key?: string }) =>
+    request<{ risk: RiskCheck; accepted: boolean; order: null }>('/api/paper-trading/risk/check', { method: 'POST', body: JSON.stringify(payload) }),
+  paperOrders: () => request<{ items: PaperOrder[] }>('/api/paper-trading/orders'),
+  paperOrderSubmit: (payload: { plan_id: string; signal_id?: string; client_order_id?: string; snapshot: Record<string, unknown>; idempotency_key?: string }) =>
+    request<{ accepted: boolean; risk: RiskCheck; order: PaperOrder | null }>('/api/paper-trading/orders', { method: 'POST', body: JSON.stringify(payload) }),
+  paperOrderTransition: (id: string, payload: { status: 'cancelled' | 'rejected'; reason?: string; expected_revision?: number; idempotency_key?: string }) =>
+    request<{ item: PaperOrder }>(`/api/paper-trading/orders/${encodeURIComponent(id)}/transition`, { method: 'POST', body: JSON.stringify(payload) }),
+  paperFills: () => request<{ items: PaperFill[] }>('/api/paper-trading/fills'),
+  paperFillSimulate: (orderId: string, payload: { quantity: number; price: number; trade_date?: string; idempotency_key?: string }) =>
+    request<{ fill: PaperFill; order: PaperOrder; position: PaperPosition }>(`/api/paper-trading/orders/${encodeURIComponent(orderId)}/fills`, { method: 'POST', body: JSON.stringify(payload) }),
+  paperPositions: () => request<{ items: PaperPosition[] }>('/api/paper-trading/positions'),
+  paperSettle: (as_of: string) => request<{ released: number }>(`/api/paper-trading/positions/settle?as_of=${encodeURIComponent(as_of)}`, { method: 'POST' }),
+  paperOutbox: () => request<{ items: Record<string, unknown>[] }>('/api/paper-trading/outbox'),
+  paperOutboxUpdate: (id: string, payload: { status: 'pending' | 'sent' | 'failed'; error?: string }) =>
+    request<{ item: Record<string, unknown> }>(`/api/paper-trading/outbox/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  paperReviews: () => request<{ items: Record<string, unknown>[] }>('/api/paper-trading/reviews'),
+  paperReviewCreate: (payload: { as_of: string; summary?: string; idempotency_key?: string }) =>
+    request<{ item: Record<string, unknown> }>('/api/paper-trading/reviews', { method: 'POST', body: JSON.stringify(payload) }),
 
   limitLadder: (asOf?: string, extColumns?: string, direction?: 'up' | 'down') => {
     const params = new URLSearchParams()

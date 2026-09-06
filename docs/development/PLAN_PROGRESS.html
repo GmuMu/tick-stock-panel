@@ -135,8 +135,8 @@
       <h1>A股智能策略交易平台<br>Development Plan V1.0</h1>
       <p class="subtitle">一张持续更新的开发地图：每个任务都绑定真实代码入口、当前状态、前置依赖和下一步动作。</p>
       <div class="meta">
-      <span>校准日期：<strong>2026-09-05</strong></span>
-        <span>当前分支：<strong>feat/sequoia-x-strategies</strong></span>
+      <span>校准日期：<strong>2026-09-06</strong></span>
+        <span>当前分支：<strong>feat/0301-indicator-spec</strong></span>
         <span>基线：<strong>25e5680</strong></span>
         <span>运行数据：<strong>data/ 不进入 Git</strong></span>
       </div>
@@ -176,7 +176,7 @@
     <div id="empty" class="empty">没有匹配的任务。可以换一个关键词或筛选条件。</div>
 
     <footer class="footer">
-      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；Phase 7 已完成，下一步进入 <code>TASK-0801</code>。
+      更新规则：只有代码入口、调用链、测试和文档证据同时匹配时才标记“已完成”。“部分完成”表示已有可复用基础但仍缺少计划契约；“待开发”表示尚无稳定实现；交易、OMS、QMT 和实盘任务在 Risk、幂等、审计、对账与 Kill Switch 完成前保持阻塞。Sequoia-X 已接入 6 个可由日线数据表达的策略，<code>PrivatePlacement</code> 保留为数据缺口；Phase 9/10 已完成，下一步进入 <code>TASK-1101</code>，当前不接真实券商。
     </footer>
   </main>
 
@@ -231,15 +231,15 @@
       ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0804", "Decision Gate", "done", "实现可解释、可审计、可过期的决策门。", "decision_gates 表与 transition API。", "已完成：支持 pending/approved/rejected/expired、理由、过期和审计。", "feat/0804-decision-gate"],
       ["Phase 8", "Thesis、Trade Plan、Decision、Journal", "TASK-0805", "Journal", "done", "记录计划、决定、订单、成交和复盘日志。", "journal_entries 与只读 audit API。", "已完成：订单/成交为后续纸面执行预留字段，本阶段不接真实交易。", "feat/0805-journal"],
 
-      ["Phase 9", "Unified Signal、Paper Loop、Review", "TASK-0901", "Unified Signal", "partial", "把策略、指标、自定义信号和监控事件统一为可追踪 Signal。", "custom_signals.py; monitor events; strategy signals", "新增适配层，不改写已有信号语义。", "feat/0901-unified-signal"],
-      ["Phase 9", "Unified Signal、Paper Loop、Review", "TASK-0902", "Paper Loop", "gap", "建立纸面执行、模拟成交、持仓和结果回放闭环。", "尚未发现正式 paper execution loop。", "依赖 0901、0804 与 OMS 前置约束。", "feat/0902-paper-loop"],
-      ["Phase 9", "Unified Signal、Paper Loop、Review", "TASK-0903", "Daily Review", "partial", "把每日信号、决定、结果和复盘证据串起来。", "market recap; AI reports; review stores", "定义 review 输入和不可变快照。", "feat/0903-daily-review"],
+      ["Phase 9", "Unified Signal、Paper Loop、Review", "TASK-0901", "Unified Signal", "done", "把策略、指标、自定义信号和监控事件统一为可追踪 Signal。", "strategy/unified_signal.py; paper-trading/signals; tests/test_phase9_phase10_paper_loop.py", "已完成：版本化适配层、确定性 ID、来源和 provenance，不改写已有信号语义。", "feat/0301-indicator-spec"],
+      ["Phase 9", "Unified Signal、Paper Loop、Review", "TASK-0902", "Paper Loop", "done", "建立纸面执行、模拟成交、持仓和结果回放闭环。", "transaction_store.py; paper_trading.py; PaperTrading.tsx", "已完成：Signal → Gate → Risk → Paper OMS → Fill → Position → Outbox，严格 paper/mock。", "feat/0301-indicator-spec"],
+      ["Phase 9", "Unified Signal、Paper Loop、Review", "TASK-0903", "Daily Review", "done", "把每日信号、决定、结果和复盘证据串起来。", "daily_reviews; paper-trading/reviews; TASK-0903-daily-review.md", "已完成：按执行日生成不可变快照，支持幂等回放。", "feat/0301-indicator-spec"],
 
-      ["Phase 10", "Risk 与 OMS", "TASK-1001", "Risk Contract", "gap", "定义风险检查输入、输出、拒绝理由和状态。", "尚未发现正式 risk contract。", "依赖 Decision/Plan，先做 fail-closed 协议。", "feat/1001-risk-contract"],
-      ["Phase 10", "Risk 与 OMS", "TASK-1002", "Risk Rules", "gap", "实现仓位、暴露、涨跌停、流动性和交易时段规则。", "尚未发现 risk rules registry。", "依赖 1001 与市场规则 golden。", "feat/1002-risk-rules"],
-      ["Phase 10", "Risk 与 OMS", "TASK-1003", "OMS State", "gap", "建立订单、状态、成交回报和取消的状态机。", "尚未发现 OMS 状态机。", "依赖 transaction DB、risk contract 和统一事件。", "feat/1003-oms-state"],
-      ["Phase 10", "Risk 与 OMS", "TASK-1004", "Idempotency / Outbox", "gap", "保证重试、崩溃恢复和消息投递不重复。", "尚未发现 idempotency/outbox 实现。", "依赖 1003，先定义唯一键和 crash recovery。", "feat/1004-idempotency-outbox"],
-      ["Phase 10", "Risk 与 OMS", "TASK-1005", "Position Projection", "gap", "从已确认事件构建可审计的持仓投影。", "尚未发现持仓 projection。", "依赖 1003/1004，不从订单日志临时推导 UI。", "feat/1005-position-projection"],
+      ["Phase 10", "Risk 与 OMS", "TASK-1001", "Risk Contract", "done", "定义风险检查输入、输出、拒绝理由和状态。", "services/risk_engine.py; risk_checks; paper-trading/risk/check", "已完成：版本化 RiskDecision、结构化拒绝码和 fail-closed 输入快照。", "feat/0301-indicator-spec"],
+      ["Phase 10", "Risk 与 OMS", "TASK-1002", "Risk Rules", "done", "实现仓位、暴露、涨跌停、流动性和交易时段规则。", "risk_engine.py; price_limits.py; test_phase9_phase10_paper_loop.py", "已完成：Gate、有效期、价位、仓位/暴露、最小单位、T+1、涨跌停、质量和连续竞价规则。", "feat/0301-indicator-spec"],
+      ["Phase 10", "Risk 与 OMS", "TASK-1003", "OMS State", "done", "建立订单、状态、成交回报和取消的状态机。", "paper_orders; submit_paper_order; simulate_fill", "已完成：accepted/partially_filled/filled/cancelled/rejected 边界和 revision 审计。", "feat/0301-indicator-spec"],
+      ["Phase 10", "Risk 与 OMS", "TASK-1004", "Idempotency / Outbox", "done", "保证重试、崩溃恢复和消息投递不重复。", "idempotency_keys; outbox_events; paper-trading/outbox", "已完成：唯一客户端订单号、同事务事件、pending/sent/failed、attempts 和错误记录。", "feat/0301-indicator-spec"],
+      ["Phase 10", "Risk 与 OMS", "TASK-1005", "Position Projection", "done", "从已确认事件构建可审计的持仓投影。", "services/position_projection.py; positions; PaperTrading.tsx", "已完成：只消费 confirmed paper fill，独立维护数量、成本、盈亏和 T+1 可卖量。", "feat/0301-indicator-spec"],
 
       ["Phase 11", "Broker 与 QMT", "TASK-1101", "Broker Protocol", "gap", "定义券商适配器、连接、订单和回报的最小协议。", "尚未发现 broker protocol。", "依赖 OMS，先实现 mock protocol。", "feat/1101-broker-protocol"],
       ["Phase 11", "Broker 与 QMT", "TASK-1102", "QMT Agent Core", "gap", "把 QMT 运行隔离为独立 Agent 进程。", "尚未发现 QMT agent core。", "依赖 1101，Windows 集成隔离在 Agent。", "feat/1102-qmt-agent-core"],
@@ -334,7 +334,7 @@
       document.getElementById("percent").textContent = `${percent.toFixed(1)}%`;
       document.querySelector(".ring").style.setProperty("--progress", `${percent}%`);
       document.getElementById("summary-title").textContent = `${counts.done}/${tasks.length} 个任务已完成`;
-      document.getElementById("summary-text").textContent = `当前阶段：TASK-0901 · Unified Signal。Phase 8 的 TASK-0801 至 TASK-0805 已完成；Phase 7 的 TASK-0701 至 TASK-0704 已完成；Sequoia-X 已完成 6 个日线策略接入。`;
+      document.getElementById("summary-text").textContent = `当前阶段：TASK-1101 · Broker Protocol。Phase 9 的 TASK-0901 至 TASK-0903 与 Phase 10 的 TASK-1001 至 TASK-1005 已完成；当前只支持本地 paper/mock，不接真实券商。`;
     }
 
     document.querySelectorAll("[data-filter]").forEach(button => {

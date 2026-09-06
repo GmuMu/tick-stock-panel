@@ -1,12 +1,20 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, Check, ClipboardList, FileClock, GitBranch, Plus, ShieldCheck, X } from 'lucide-react'
+import { BookOpen, Check, ClipboardList, FileClock, GitBranch, Plus, ShieldCheck, X, type LucideIcon } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
-import { api, type DecisionGate, type JournalEntry, type TradingPlan, type TradingThesis } from '@/lib/api'
+import { api, type DecisionGate, type JournalEntry, type TradingPlan, type TradingResearchSummary, type TradingThesis } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
 
 type Tab = 'thesis' | 'plans' | 'decisions' | 'journal' | 'audit'
+
+const SUMMARY_CARDS: [keyof TradingResearchSummary, string, LucideIcon][] = [
+  ['theses', 'Thesis', BookOpen],
+  ['plans', '计划', ClipboardList],
+  ['decisions', '决策门', ShieldCheck],
+  ['journal', '日志', FileClock],
+  ['audit_events', '审计事件', GitBranch],
+]
 
 const inputCls = 'w-full rounded-btn border border-border bg-base px-3 py-2 text-xs text-foreground outline-none focus:border-accent'
 const cardCls = 'rounded-card border border-border bg-surface/70 p-4 shadow-sm'
@@ -50,10 +58,7 @@ export function TradingResearch() {
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="mx-auto max-w-6xl space-y-4">
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-            {[
-              ['theses', 'Thesis', BookOpen], ['plans', '计划', ClipboardList], ['decisions', '决策门', ShieldCheck],
-              ['journal', '日志', FileClock], ['audit_events', '审计事件', GitBranch],
-            ].map(([key, label, Icon]) => (
+            {SUMMARY_CARDS.map(([key, label, Icon]) => (
               <div key={String(key)} className={cardCls}>
                 <div className="flex items-center gap-2 text-[11px] text-muted"><Icon className="h-3.5 w-3.5 text-accent" />{label}</div>
                 <div className="mt-2 font-mono text-xl text-foreground">{summary.data?.[key as keyof typeof summary.data] ?? '—'}</div>

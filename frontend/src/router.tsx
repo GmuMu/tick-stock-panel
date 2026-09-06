@@ -35,6 +35,7 @@ const Branding = lazy(() => import('./pages/Branding').then(m => ({ default: m.B
 const Settings = lazy(() => import('./pages/Settings').then(m => ({ default: m.Settings })))
 const Regime = lazy(() => import('./pages/Regime').then(m => ({ default: m.Regime })))
 const TradingResearch = lazy(() => import('./pages/TradingResearch').then(m => ({ default: m.TradingResearch })))
+const PaperTrading = lazy(() => import('./pages/PaperTrading').then(m => ({ default: m.PaperTrading })))
 const AbnormalMoves = lazy(() => import('./pages/AbnormalMoves').then(m => ({ default: m.AbnormalMoves })))
 const Dev = lazy(() => import('./pages/Dev').then(m => ({ default: m.Dev })))
 
@@ -60,6 +61,7 @@ const CORE_ROUTE_PATHS = new Set([
   '/indices',
   '/regime',
   '/trading-research',
+  '/paper-trading',
   '/abnormal',
   '/branding',
   '/settings',
@@ -135,6 +137,7 @@ export const router = createBrowserRouter([
       { path: 'indices', element: <Indices /> },
       { path: 'regime', element: <Regime /> },
       { path: 'trading-research', element: <TradingResearch /> },
+      { path: 'paper-trading', element: <PaperTrading /> },
       { path: 'abnormal', element: <AbnormalMoves /> },
       { path: 'branding', element: <Branding /> },
       { path: 'settings', element: <Settings /> },

@@ -126,6 +126,16 @@ export const QK = {
   tradingDecisions: ['trading-decisions'] as const,
   tradingJournal: ['trading-journal'] as const,
   tradingAudit: ['trading-audit'] as const,
+
+  // Phase 9/10 纸面交易闭环
+  paperSummary: ['paper-summary'] as const,
+  paperSignals: ['paper-signals'] as const,
+  paperRiskChecks: ['paper-risk-checks'] as const,
+  paperOrders: ['paper-orders'] as const,
+  paperFills: ['paper-fills'] as const,
+  paperPositions: ['paper-positions'] as const,
+  paperOutbox: ['paper-outbox'] as const,
+  paperReviews: ['paper-reviews'] as const,
 } as const
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====
