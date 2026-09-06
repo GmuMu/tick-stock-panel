@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # ── 常量 ────────────────────────────────────────────────
 ID_RE = re.compile(r"^[a-z0-9_]{1,40}$")
-RULE_TYPES = {"strategy", "signal", "resonance", "price", "market", "ladder", "sector", "abnormal", "volume_delta", "date"}
+RULE_TYPES = {"strategy", "signal", "resonance", "price", "market", "ladder", "sector", "abnormal", "volume_delta", "box", "date"}
 SCOPES = {"symbols", "all", "sector", "watchlist_group"}
 LOGICS = {"and", "or"}
 DIRECTIONS = {"entry", "exit", "both"}
@@ -52,6 +52,8 @@ ABNORMAL_DIRECTIONS = {"up", "down", "both"}
 ABNORMAL_WINDOWS = {"any", "3d", "10d", "30d"}
 # volume_delta 规则 (轮询放量): 阈值口径 (手数 / 成交额)
 VD_METRICS = {"volume", "amount"}
+BOX_STATUSES = {"breakout_up", "breakout_down", "near_upper", "near_lower", "inside"}
+BOX_LOOKBACK_DAYS = {30, 60, 120}
 # volume_delta 基础过滤默认值 (与策略 DEFAULT_BASIC_FILTER 核心子集对齐:
 # 价格 3-300 元, 总市值 >=10 亿, 当日成交额 >=2000 万, 剔除 ST)
 VD_BASIC_FILTER_DEFAULTS: dict = {
@@ -310,6 +312,22 @@ def validate(rule: dict) -> None:
                         raise ValueError(f"basic_filter.{key} 必须是正数字或 null")
                 else:
                     raise ValueError(f"basic_filter 不支持字段: {key}")
+    elif rule.get("type") == "box":
+        if rule.get("asset_type", "stock") != "stock":
+            raise ValueError("箱体监控仅支持股票")
+        statuses = rule.get("box_statuses", ["breakout_up"])
+        if not isinstance(statuses, list) or not statuses:
+            raise ValueError("箱体监控至少选择一个箱体状态")
+        if len(statuses) > len(BOX_STATUSES):
+            raise ValueError("箱体状态选择过多")
+        invalid_statuses = set(statuses) - BOX_STATUSES
+        if invalid_statuses:
+            raise ValueError(f"box_statuses 包含非法状态: {sorted(invalid_statuses)}")
+        lookback = rule.get("box_lookback_days", 60)
+        if isinstance(lookback, bool) or not isinstance(lookback, int) or lookback not in BOX_LOOKBACK_DAYS:
+            raise ValueError(f"box_lookback_days 必须是 {sorted(BOX_LOOKBACK_DAYS)} 之一")
+        if not isinstance(rule.get("box_require_volume_confirmation", False), bool):
+            raise ValueError("box_require_volume_confirmation 必须是布尔值")
     elif rule.get("type") == "date":
         # 日期提醒: 纯日历, 锚定标的 (scope=symbols) 避免无对象的空提醒
         remind = rule.get("remind_date")
@@ -437,6 +455,22 @@ def normalize(rule: dict) -> dict:
         r.setdefault("threshold_volume", 9000)
         r.setdefault("threshold_amount", 1e6)
         r["basic_filter"] = {**VD_BASIC_FILTER_DEFAULTS, **(r.get("basic_filter") or {})}
+    if r.get("type") == "box":
+        r["scope"] = r.get("scope", "symbols")
+        statuses = r.get("box_statuses")
+        r["box_statuses"] = (
+            list(dict.fromkeys(statuses))
+            if isinstance(statuses, list) and statuses
+            else ["breakout_up"]
+        )
+        r["box_lookback_days"] = (
+            r.get("box_lookback_days")
+            if r.get("box_lookback_days") in BOX_LOOKBACK_DAYS
+            else 60
+        )
+        r["box_require_volume_confirmation"] = bool(
+            r.get("box_require_volume_confirmation", False),
+        )
     if r.get("type") == "sector":
         r["scope"] = "all"
         r["symbols"] = []

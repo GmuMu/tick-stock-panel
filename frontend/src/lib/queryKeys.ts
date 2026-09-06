@@ -81,6 +81,8 @@ export const QK = {
                            ['kline', symbol, start, end, extColumns ?? ''] as const,
   klineLatest:          (symbol: string) => ['kline-latest', symbol] as const,
   stockLevels:          (symbol: string, days?: number) => ['stock-levels', symbol, days ?? 120] as const,
+  stockBox:             (symbol: string, lookback?: number) => ['stock-box', symbol, lookback ?? 60] as const,
+  stockBoxBatch:        (symbols: string, lookback?: number) => ['stock-box-batch', symbols, lookback ?? 60] as const,
   klineMinute:          (symbol: string, date: string) =>
                              ['kline-minute', symbol, date] as const,
   klineMinuteRange:     (symbol: string, days: number) =>

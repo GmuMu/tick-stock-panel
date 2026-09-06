@@ -177,6 +177,65 @@ export interface StockLevels {
   series?: LevelSeries
 }
 
+export interface StockBoxCondition {
+  key: string
+  label: string
+  passed: boolean
+  detail: string
+}
+
+export interface StockBoxState {
+  date: string
+  close: number | null
+  upper: number | null
+  lower: number | null
+  middle: number | null
+  position_pct: number | null
+  width_pct: number | null
+  status: 'inside' | 'near_upper' | 'near_lower' | 'breakout_up' | 'breakout_down'
+  status_label: string
+  breakout_up: boolean
+  breakout_down: boolean
+}
+
+export interface StockBoxSeriesPoint extends StockBoxState {
+  volume_ratio: number | null
+  volume_confirmed: boolean
+}
+
+export interface StockBoxAnalysis {
+  symbol: string
+  as_of: string | null
+  lookback_days: number
+  observations: number
+  current: {
+    date: string
+    open: number | null
+    high: number | null
+    low: number | null
+    close: number | null
+    ma20: number | null
+  } | null
+  box: StockBoxState | null
+  volume: {
+    current: number | null
+    average: number | null
+    ratio: number | null
+    confirmed: boolean
+  } | null
+  score: number | null
+  conditions: StockBoxCondition[]
+  recent: StockBoxState[]
+  box_series: StockBoxSeriesPoint[]
+  message: string
+}
+
+export interface StockBoxBatchResponse {
+  results: Record<string, StockBoxAnalysis>
+  count: number
+  elapsed_ms: number
+}
+
 export interface AiStockReport {
   id: string
   symbol: string
@@ -1188,7 +1247,7 @@ export interface MonitorRule {
   id: string
   name: string
   enabled: boolean
-  type: 'strategy' | 'signal' | 'resonance' | 'price' | 'market' | 'ladder' | 'sector' | 'abnormal' | 'volume_delta' | 'date'
+  type: 'strategy' | 'signal' | 'resonance' | 'price' | 'market' | 'ladder' | 'sector' | 'abnormal' | 'volume_delta' | 'box' | 'date'
   asset_type?: 'stock' | 'etf' | 'index'
   scope_contract_version?: string
   rolling_watch_contract_version?: string
@@ -1251,6 +1310,10 @@ export interface MonitorRule {
   threshold_volume?: number                 // 单轮增量 >= 此值时报警
   threshold_amount?: number                 // metric=amount 时: 单轮增量 >= 此值(元)时报警
   basic_filter?: VDBasicFilter             // 基础过滤 (与策略 basic_filter 语义对齐)
+  // box 专属: 箱体状态监控
+  box_statuses?: Array<'breakout_up' | 'breakout_down' | 'near_upper' | 'near_lower' | 'inside'>
+  box_lookback_days?: 30 | 60 | 120
+  box_require_volume_confirmation?: boolean
   // date 类型 (日期提醒): 纯日历窗口, 无行情 conditions
   remind_date?: string | null   // YYYY-MM-DD
   lead_days?: number            // 提前 N 天进入提醒窗口
@@ -1299,6 +1362,8 @@ export interface MonitorRuleOptions {
     reason: string
   }
   sector_targets: Record<SectorKind, SectorMonitorTarget[]>
+  box_statuses?: { key: string; label: string }[]
+  box_lookback_days?: number[]
 }
 
 export interface AlertEvent {
@@ -1335,6 +1400,17 @@ export interface AlertEvent {
   abnormal_value?: number
   abnormal_threshold?: number
   abnormal_closeness?: number
+  /** 箱体状态告警 (source=box) 附加字段 */
+  box_status?: string
+  box_status_label?: string
+  box_lookback_days?: number
+  box_upper?: number
+  box_lower?: number
+  box_middle?: number
+  box_position_pct?: number
+  box_width_pct?: number
+  box_volume_ratio?: number | null
+  box_volume_confirmed?: boolean
   /** 触发时使用的告警规则不可变快照 */
   alert_rule?: {
     alert_rule_contract_version: string
@@ -3418,6 +3494,17 @@ export const api = {
   // ===== 个股分析 =====
   stockAnalysisLevels: (symbol: string, days = 120) =>
     request<StockLevels>(`/api/stock-analysis/levels?symbol=${encodeURIComponent(symbol)}&days=${days}`),
+
+  stockAnalysisBox: (symbol: string, lookback = 60, recent = 8) =>
+    request<StockBoxAnalysis>(
+      `/api/stock-analysis/box?symbol=${encodeURIComponent(symbol)}&lookback=${lookback}&recent=${recent}`,
+    ),
+
+  stockAnalysisBoxBatch: (symbols: string[], lookback = 60, recent = 8) =>
+    request<StockBoxBatchResponse>('/api/stock-analysis/box/batch', {
+      method: 'POST',
+      body: JSON.stringify({ symbols, lookback, recent }),
+    }),
 
   stockAnalysisReportsList: () =>
     request<{ reports: AiStockReport[] }>('/api/stock-analysis/reports'),

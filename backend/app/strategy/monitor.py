@@ -22,6 +22,7 @@ from typing import Any, Callable
 import polars as pl
 
 from app.market_time import cn_today
+from app.services.box_analysis import analyze_box
 from app.strategy import config as _strategy_config
 from app.strategy.alert_rule import build_alert_rule_snapshot
 from app.strategy.custom_signals import _OP_BUILDERS  # type: ignore  # 复用运算符构造器
@@ -512,6 +513,9 @@ class MonitorRuleEngine:
             rule.get("resonance_contract_version", "1.0"),
             rule.get("resonance_window_seconds", 300),
             rule.get("resonance_min_signals", 2),
+            tuple(sorted(str(status) for status in rule.get("box_statuses", []))),
+            rule.get("box_lookback_days", 60),
+            rule.get("box_require_volume_confirmation", False),
         )
 
     def set_rules(self, rules: list[dict]) -> None:
@@ -1210,6 +1214,9 @@ class MonitorRuleEngine:
         elif rtype == "volume_delta":
             # 轮询放量监控: 相邻两次全市场快照的成交量差值, 独立处理走专属 message
             return self._attach_scope(self._evaluate_volume_delta(scoped, rule, now), scope)
+        elif rtype == "box":
+            # 箱体状态依赖历史日 K, 独立处理并携带箱体扩展字段。
+            return self._attach_scope(self._evaluate_box(scoped, rule, now), scope)
         else:
             # signal / price / market: 通用条件匹配
             for sym, name, price, pct, hit_sigs in self._match_conditions(scoped, rule):
@@ -1283,6 +1290,149 @@ class MonitorRuleEngine:
                 except Exception as e:
                     logger.warning("alert handler failed: %s", e)
 
+        return events
+
+    def _evaluate_box(self, scoped: pl.DataFrame, rule: dict, now: float) -> list[dict]:
+        """评估箱体状态监控,复用历史 enriched 日 K 缓存。"""
+        history_loader = self._history_loader_for(rule)
+        if history_loader is None or "symbol" not in scoped.columns:
+            return []
+
+        lookback = int(rule.get("box_lookback_days", 60))
+        statuses = set(rule.get("box_statuses") or ("breakout_up",))
+        require_volume = bool(rule.get("box_require_volume_confirmation", False))
+        try:
+            history = history_loader(cn_today(), lookback)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("箱体历史数据加载失败: %s", exc)
+            return []
+        if history is None or history.is_empty() or "symbol" not in history.columns:
+            return []
+
+        fields = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "ma20"]
+        common = [field for field in fields if field in history.columns and field in scoped.columns]
+        required = {"symbol", "date", "high", "low", "close"}
+        if not required.issubset(common):
+            return []
+
+        symbols = [
+            str(symbol) for symbol in scoped.get_column("symbol").unique().to_list()
+            if symbol is not None and str(symbol)
+        ]
+        if not symbols:
+            return []
+
+        hist = history.filter(pl.col("symbol").is_in(symbols)).select(common)
+        current = scoped.select(common)
+        if hist.is_empty() and current.is_empty():
+            return []
+
+        history_by_symbol = {
+            str(frame["symbol"][0]): frame
+            for frame in hist.partition_by("symbol", as_dict=True).values()
+            if frame.height > 0
+        }
+        current_by_symbol = {
+            str(frame["symbol"][0]): frame
+            for frame in current.partition_by("symbol", as_dict=True).values()
+            if frame.height > 0
+        }
+
+        def _safe_text(value: Any, digits: int = 2) -> str:
+            if value is None:
+                return "-"
+            try:
+                return f"{float(value):.{digits}f}"
+            except (TypeError, ValueError):
+                return str(value)
+
+        name_by_symbol: dict[str, Any] = {}
+        quote_by_symbol: dict[str, dict[str, Any]] = {}
+        for row in scoped.iter_rows(named=True):
+            symbol = str(row.get("symbol") or "")
+            if symbol:
+                name_by_symbol[symbol] = row.get("name") or self._name_map.get(symbol) or symbol
+                quote_by_symbol[symbol] = row
+
+        events: list[dict] = []
+        for symbol in symbols:
+            symbol_history = history_by_symbol.get(symbol, hist.head(0))
+            symbol_current = current_by_symbol.get(symbol, current.head(0))
+            frames = [frame for frame in (symbol_history, symbol_current) if not frame.is_empty()]
+            if not frames:
+                continue
+            try:
+                bars = (
+                    pl.concat(frames, how="vertical_relaxed")
+                    .sort("date")
+                    .unique(subset=["symbol", "date"], keep="last", maintain_order=True)
+                    .sort("date")
+                )
+                analysis = analyze_box(
+                    bars,
+                    symbol=symbol,
+                    lookback=lookback,
+                    recent=3,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("箱体分析失败 %s: %s", symbol, exc)
+                continue
+
+            box = analysis.get("box") or {}
+            status = box.get("status")
+            if status not in statuses:
+                continue
+            if (
+                require_volume
+                and status == "breakout_up"
+                and not bool((analysis.get("volume") or {}).get("confirmed"))
+            ):
+                continue
+
+            key = (rule["id"], symbol, f"box_{status}")
+            cooldown = int(rule.get("cooldown_seconds", 3600))
+            last = self._last_fire.get(key)
+            if last is not None and (now - last) < cooldown:
+                continue
+            self._last_fire[key] = now
+
+            status_label = box.get("status_label") or status
+            volume = analysis.get("volume") or {}
+            volume_ratio = volume.get("ratio")
+            message = rule.get("message", "") or (
+                f"箱体{status_label} · {lookback}日箱体 "
+                f"上沿 {_safe_text(box.get('upper'))} / 下沿 {_safe_text(box.get('lower'))} · "
+                f"位置 {_safe_text(box.get('position_pct'))}%"
+                f"{f' · 量比 {_safe_text(volume_ratio)}' if volume_ratio is not None else ''}"
+            )
+            current_quote = analysis.get("current") or {}
+            events.append({
+                "ts": int(now * 1000),
+                "rule_id": rule["id"],
+                "rule_name": rule.get("name", ""),
+                "source": "box",
+                "type": status_label,
+                "symbol": symbol,
+                "name": name_by_symbol.get(symbol, symbol),
+                "message": message,
+                "price": quote_by_symbol.get(symbol, {}).get("close", current_quote.get("close")),
+                "change_pct": quote_by_symbol.get(symbol, {}).get("change_pct"),
+                "signals": [],
+                "severity": rule.get("severity", "info"),
+                "conditions": [],
+                "logic": "and",
+                "box_status": status,
+                "box_status_label": status_label,
+                "box_lookback_days": lookback,
+                "box_upper": box.get("upper"),
+                "box_lower": box.get("lower"),
+                "box_middle": box.get("middle"),
+                "box_position_pct": box.get("position_pct"),
+                "box_width_pct": box.get("width_pct"),
+                "box_volume_ratio": volume_ratio,
+                "box_volume_confirmed": bool(volume.get("confirmed")),
+                "alert_rule": build_alert_rule_snapshot(rule),
+            })
         return events
 
     def _match_resonance(

@@ -18,7 +18,7 @@ from datetime import date, timedelta
 import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.indicators.levels import (
     LEVEL_PRICE_BASIS_CANONICAL,
@@ -28,6 +28,7 @@ from app.indicators.levels import (
     summarize_levels,
 )
 from app.services import stock_reports
+from app.services.box_analysis import analyze_box, analyze_box_batch
 from app.services.stock_analyzer import analyze_stock_stream
 
 logger = logging.getLogger(__name__)
@@ -157,6 +158,80 @@ def get_levels(
         "series": series,
         "price_basis": level_price_basis(df),
         "data_quality": level_data_quality(df).to_dict(),
+    }
+
+
+@router.get("/box")
+def get_box_analysis(
+    request: Request,
+    symbol: str = Query(..., description="标的代码,如 000001.SZ"),
+    lookback: int = Query(60, ge=20, le=250, description="箱体回看交易日"),
+    recent: int = Query(8, ge=3, le=20, description="返回最近状态条数"),
+):
+    """查看单只股票的箱体边界、位置、量能确认和近期状态。"""
+    if not symbol:
+        raise HTTPException(400, "symbol 不能为空")
+
+    repo = request.app.state.repo
+    end = date.today()
+    start = end - timedelta(days=lookback * 3)
+    df = repo.get_daily_asset(repo.resolve_asset_type(symbol), symbol, start, end)
+    return analyze_box(df, symbol=symbol, lookback=lookback, recent=recent)
+
+
+class BoxBatchRequest(BaseModel):
+    """批量箱体分析请求。"""
+
+    symbols: list[str] = Field(default_factory=list, max_length=500)
+    lookback: int = Field(default=60, ge=20, le=250)
+    recent: int = Field(default=8, ge=3, le=20)
+
+
+@router.post("/box/batch")
+def get_box_analysis_batch(request: Request, body: BoxBatchRequest):
+    """批量分析一组股票的箱体状态,默认只在用户主动打开时调用。"""
+    symbols = list(dict.fromkeys(str(symbol).strip() for symbol in body.symbols if str(symbol).strip()))
+    if not symbols:
+        return {"results": {}, "count": 0, "elapsed_ms": 0}
+
+    repo = request.app.state.repo
+    end = date.today()
+    start = end - timedelta(days=body.lookback * 3)
+    columns = ["symbol", "date", "high", "low", "close", "volume", "ma20"]
+    frames: dict[str, pl.DataFrame] = {}
+    stock_symbols: list[str] = []
+    other_symbols: list[str] = []
+    for symbol in symbols:
+        if repo.resolve_asset_type(symbol) == "stock":
+            stock_symbols.append(symbol)
+        else:
+            other_symbols.append(symbol)
+
+    if stock_symbols:
+        stock_df = repo.get_daily_batch(stock_symbols, start, end, columns=columns)
+        if not stock_df.is_empty():
+            frames.update({
+                symbol: part.sort("date")
+                for symbol, part in (
+                    (part["symbol"][0], part)
+                    for part in stock_df.partition_by("symbol", maintain_order=True)
+                    if not part.is_empty()
+                )
+            })
+
+    for symbol in other_symbols:
+        asset_type = repo.resolve_asset_type(symbol)
+        frames[symbol] = repo.get_daily_asset(asset_type, symbol, start, end, columns=columns)
+
+    results = analyze_box_batch(
+        {symbol: frames.get(symbol, pl.DataFrame()) for symbol in symbols},
+        lookback=body.lookback,
+        recent=body.recent,
+    )
+    return {
+        "results": results,
+        "count": len(results),
+        "elapsed_ms": 0,
     }
 
 

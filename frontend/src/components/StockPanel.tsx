@@ -8,7 +8,7 @@ import { StockDailyKChart, getDefaultRange, toOHLC } from '@/components/StockDai
 import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { financialMetricsQueryOptions, useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities } from '@/lib/useSharedQueries'
-import type { ChartMarker, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
+import type { ChartBoxSeriesPoint, ChartMarker, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
 import {
   loadInfoFields,
   saveInfoFields,
@@ -28,6 +28,7 @@ interface Props {
   markers?: ChartMarker[]
   ranges?: ChartRange[]
   priceLines?: ChartPriceLine[]
+  boxSeries?: ChartBoxSeriesPoint[]
   showLimitMarkers?: boolean
   showMarkerToggle?: boolean
   /** 加监控回调 (传入后信息条显示 RadioTower 图标) */
@@ -64,6 +65,7 @@ export function StockPanel({
   markers,
   ranges,
   priceLines,
+  boxSeries,
   showLimitMarkers = true,
   showMarkerToggle = true,
   onMonitor,
@@ -211,6 +213,7 @@ export function StockPanel({
           markers={markers}
           ranges={ranges}
           priceLines={priceLines}
+          boxSeries={boxSeries}
           showLimitMarkers={showLimitMarkers}
           showMarkerToggle={showMarkerToggle}
           linkedPrice={linkedPrice}

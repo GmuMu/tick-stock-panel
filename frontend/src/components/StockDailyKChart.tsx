@@ -8,6 +8,7 @@ import {
   OVERLAY_INDICATORS,
   SUB_CHARTS,
   type ChartMarker,
+  type ChartBoxSeriesPoint,
   type ChartPriceLine,
   type ChartRange,
   type OHLC,
@@ -33,6 +34,7 @@ interface Props {
   markers?: ChartMarker[]
   ranges?: ChartRange[]
   priceLines?: ChartPriceLine[]
+  boxSeries?: ChartBoxSeriesPoint[]
   showLimitMarkers?: boolean
   showIndicatorControls?: boolean
   showMarkerToggle?: boolean
@@ -110,6 +112,7 @@ export function StockDailyKChart({
   markers,
   ranges,
   priceLines,
+  boxSeries,
   showLimitMarkers = true,
   showIndicatorControls = true,
   showMarkerToggle = true,
@@ -247,6 +250,7 @@ export function StockDailyKChart({
           markers={allMarkers}
           ranges={ranges}
           priceLines={priceLines}
+          boxSeries={boxSeries}
           height={chartHeight - 22}
           showMA={showMA}
           showInfoBar={showInfoBar}

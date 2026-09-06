@@ -23,7 +23,7 @@ import { usePreferences, useQuoteStatus } from '@/lib/useSharedQueries'
 
 const TYPE_LABEL: Record<string, string> = {
   signal: '信号', price: '价格/涨跌', market: '市场异动', strategy: '策略监控', sector: '板块监控',
-  abnormal: '异动监控', volume_delta: '轮询放量', date: '日期提醒',
+  abnormal: '异动监控', volume_delta: '轮询放量', box: '箱体监控', date: '日期提醒',
 }
 
 /** 严重级别 → 左侧色条 + 图标 */
@@ -40,6 +40,7 @@ const SOURCE_BADGE_STYLE: Record<string, string> = {
   sector:   'bg-cyan-500/10 text-cyan-700 border-cyan-500/20 dark:text-cyan-300',
   abnormal: 'bg-orange-500/10 text-orange-500 border-orange-500/20 dark:text-orange-400',
   volume_delta: 'bg-rose-500/10 text-rose-400 border-rose-500/20 dark:text-rose-300',
+  box:      'bg-indigo-500/10 text-indigo-500 border-indigo-500/20 dark:text-indigo-300',
   date:     'bg-violet-500/10 text-violet-500 border-violet-500/20 dark:text-violet-300',
 }
 
@@ -134,7 +135,7 @@ export function Monitor() {
   }, [searchParams, setSearchParams])
 
   // 触发记录: 过滤 + 统计 (提升到主组件, 供 header 行使用)
-  const [filter, setFilter] = useState<'all' | 'strategy' | 'signal' | 'price' | 'market' | 'sector' | 'abnormal' | 'volume_delta' | 'date'>('all')
+  const [filter, setFilter] = useState<'all' | 'strategy' | 'signal' | 'price' | 'market' | 'sector' | 'abnormal' | 'volume_delta' | 'box' | 'date'>('all')
   const [confirmClear, setConfirmClear] = useState(false)
   const [confirmClearRules, setConfirmClearRules] = useState(false)
 
@@ -215,7 +216,7 @@ export function Monitor() {
               <SectionHeader icon={BellRing} title="触发记录" />
               {/* 过滤标签 */}
               <div className="flex flex-wrap items-center gap-0.5">
-                {(['all', 'strategy', 'signal', 'price', 'market', 'sector', 'abnormal', 'volume_delta', 'date'] as const).map(f => (
+                {(['all', 'strategy', 'signal', 'price', 'market', 'sector', 'abnormal', 'volume_delta', 'box', 'date'] as const).map(f => (
                   <button
                     key={f}
                     onClick={() => setFilter(f)}
@@ -551,7 +552,23 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                         </span>
                       </div>
                       {/* 详情行: 命中条件 (signal/price/market) + 当前价 / 或默认消息 */}
-                      {(ev.conditions && ev.conditions.length > 0) ? (
+                      {ev.source === 'box' ? (
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
+                          <span className="text-secondary">{ev.box_status_label ?? ev.type}</span>
+                          {ev.box_lookback_days != null && <span className="text-muted">{ev.box_lookback_days}日箱体</span>}
+                          {ev.box_upper != null && ev.box_lower != null && (
+                            <span className="font-mono text-foreground/80">
+                              上沿 {ev.box_upper} / 下沿 {ev.box_lower}
+                            </span>
+                          )}
+                          {ev.box_position_pct != null && (
+                            <span className="text-muted">位置 {ev.box_position_pct.toFixed(1)}%</span>
+                          )}
+                          {ev.box_volume_ratio != null && (
+                            <span className="text-muted">量比 {ev.box_volume_ratio.toFixed(2)}</span>
+                          )}
+                        </div>
+                      ) : (ev.conditions && ev.conditions.length > 0) ? (
                         <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px]">
                           <span className="text-muted">命中</span>
                           {ev.conditions.map((c: MonitorCondition, ci: number) => (
@@ -914,6 +931,26 @@ function RulesList({ rulesQuery, onEdit }: {
                   <span className="rounded bg-elevated px-1.5 py-0.5 text-[9px] text-secondary">
                     {r.direction === 'up' ? '涨势偏离' : r.direction === 'down' ? '跌势偏离' : '涨跌双向'}
                   </span>
+                </div>
+              ) : r.type === 'box' ? (
+                <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 pl-0.5">
+                  {(r.box_statuses ?? []).map(status => (
+                    <span key={status} className="rounded bg-indigo-500/8 px-1.5 py-0.5 text-[9px] text-indigo-500 dark:text-indigo-300">
+                      {{
+                        breakout_up: '向上突破',
+                        breakout_down: '向下跌破',
+                        near_upper: '接近上沿',
+                        near_lower: '接近下沿',
+                        inside: '箱体运行',
+                      }[status] ?? status}
+                    </span>
+                  ))}
+                  <span className="rounded bg-elevated px-1.5 py-0.5 text-[9px] text-secondary">
+                    {r.box_lookback_days ?? 60}日箱体
+                  </span>
+                  {r.box_require_volume_confirmation && (
+                    <span className="rounded bg-elevated px-1.5 py-0.5 text-[9px] text-secondary">突破放量确认</span>
+                  )}
                 </div>
               ) : r.type === 'date' ? (
                 <div className="mt-1 flex items-center gap-1 pl-0.5 text-[9px] text-secondary">

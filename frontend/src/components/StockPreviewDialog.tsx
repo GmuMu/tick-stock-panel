@@ -8,8 +8,10 @@ import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
 import { fmtPct } from '@/lib/format'
 import { StockPanel, getDefaultRange } from '@/components/StockPanel'
+import { StockBoxAnalysis } from '@/components/StockBoxAnalysis'
 import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
 import { StockMultiDayIntradayChart } from '@/components/StockMultiDayIntradayChart'
+import type { ChartBoxSeriesPoint, ChartMarker, ChartPriceLine } from '@/components/EChartsCandlestick'
 import { DatePicker } from '@/components/DatePicker'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
 import { PriceAlertDialog } from '@/components/stock-analysis/PriceAlertDialog'
@@ -148,6 +150,55 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
   const monitorPriceLines = useMemo(
     () => symbol ? buildMonitorPriceLines(monitorRules.data?.rules ?? [], symbol) : [],
     [monitorRules.data?.rules, symbol],
+  )
+  const [boxLookback, setBoxLookback] = useState<number>(60)
+  const boxAnalysis = useQuery({
+    queryKey: QK.stockBox(symbol ?? '', boxLookback),
+    queryFn: () => api.stockAnalysisBox(symbol!, boxLookback),
+    enabled: !!symbol,
+    staleTime: 30_000,
+  })
+  const boxSeries = useMemo<ChartBoxSeriesPoint[]>(
+    () => (boxAnalysis.data?.box_series ?? []).map(point => ({
+      date: point.date.slice(0, 10),
+      upper: point.upper,
+      lower: point.lower,
+      middle: point.middle,
+      status: point.status,
+      volumeConfirmed: point.volume_confirmed,
+    })),
+    [boxAnalysis.data?.box_series],
+  )
+  const boxMarkers = useMemo<ChartMarker[]>(
+    () => boxSeries
+      .filter(point => point.status === 'breakout_up' || point.status === 'breakout_down')
+      .map(point => ({
+        date: point.date,
+        kind: point.status === 'breakout_up' ? 'buy' : 'sell',
+        label: point.status === 'breakout_up'
+          ? (point.volumeConfirmed ? '放量破' : '上破')
+          : '下破',
+        color: point.status === 'breakout_up' ? '#F59E0B' : '#38BDF8',
+      })),
+    [boxSeries],
+  )
+  const boxPriceLines = useMemo<ChartPriceLine[]>(
+    () => {
+      const box = boxAnalysis.data?.box
+      if (!box) return []
+      const lines: ChartPriceLine[] = []
+      if (typeof box.upper === 'number' && Number.isFinite(box.upper)) {
+        lines.push({ value: box.upper, label: '箱上沿', color: '#F59E0B' })
+      }
+      if (typeof box.middle === 'number' && Number.isFinite(box.middle)) {
+        lines.push({ value: box.middle, label: '箱中轴', color: '#A78BFA' })
+      }
+      if (typeof box.lower === 'number' && Number.isFinite(box.lower)) {
+        lines.push({ value: box.lower, label: '箱下沿', color: '#38BDF8' })
+      }
+      return lines
+    },
+    [boxAnalysis.data?.box],
   )
   const inWatchlist = (watchlist.data?.symbols ?? []).some((s: any) => s.symbol === symbol)
 
@@ -604,18 +655,27 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
             {/* 图表内容 */}
             <div className="flex-1 overflow-auto p-4">
               {view === 'daily' ? (
-                <StockPanel
-                  symbol={symbol}
-                  height={420}
-                  showIntraday
-                  dateRange={dateRange}
-                  priceLines={monitorPriceLines}
-                  onPriceDoubleClick={openPriceAlert}
-                  refetchIntervalMs={intradayRefetchMs}
-                  prefetchSymbols={prefetchSymbols}
-                  intradayDays={effectiveIntradayDays}
-                  dailyKlineFlex="flex-[1.4]"
-                />
+                <>
+                  <StockPanel
+                    symbol={symbol}
+                    height={420}
+                    showIntraday
+                    dateRange={dateRange}
+                    markers={boxMarkers}
+                    priceLines={[...monitorPriceLines, ...boxPriceLines]}
+                    boxSeries={boxSeries}
+                    onPriceDoubleClick={openPriceAlert}
+                    refetchIntervalMs={intradayRefetchMs}
+                    prefetchSymbols={prefetchSymbols}
+                    intradayDays={effectiveIntradayDays}
+                    dailyKlineFlex="flex-[1.4]"
+                  />
+                  <StockBoxAnalysis
+                    symbol={symbol}
+                    lookback={boxLookback}
+                    onLookbackChange={setBoxLookback}
+                  />
+                </>
               ) : (
                 <>
                 <StockPanel

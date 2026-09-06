@@ -85,7 +85,7 @@ class RuleModel(BaseModel):
     id: str
     name: str
     enabled: bool = True
-    type: str          # strategy | signal | resonance | price | market | sector | abnormal
+    type: str          # strategy | signal | resonance | price | market | sector | abnormal | box
     asset_type: str = "stock"   # stock | etf (etf: strategy 型走 ETF 历史加载器)
     scope_contract_version: str = WATCH_SCOPE_CONTRACT_VERSION
     rolling_watch_contract_version: str = ROLLING_WATCH_CONTRACT_VERSION
@@ -133,6 +133,10 @@ class RuleModel(BaseModel):
     threshold_amount: float = 1e6    # metric=amount 时: 单轮增量 >= 此值(元)时报警
     # 基础过滤 (与策略 basic_filter 语义对齐): 值为 null 表示不过滤
     basic_filter: dict = {}
+    # box 专属 (箱体状态监控)
+    box_statuses: list[str] = []
+    box_lookback_days: int = 60
+    box_require_volume_confirmation: bool = False
 
 
 # ── 字段选项 ─────────────────────────────────────────────
@@ -188,6 +192,7 @@ def get_options(request: Request):
             {"key": "abnormal", "label": "异动监控"},
             {"key": "sector", "label": "板块监控"},
             {"key": "volume_delta", "label": "轮询放量"},
+            {"key": "box", "label": "箱体监控"},
             {"key": "date", "label": "日期提醒"},
         ],
         "scopes": [
@@ -214,6 +219,14 @@ def get_options(request: Request):
             {"key": "exit", "label": "出场"},
             {"key": "both", "label": "出入都报"},
         ],
+        "box_statuses": [
+            {"key": "breakout_up", "label": "向上突破"},
+            {"key": "breakout_down", "label": "向下跌破"},
+            {"key": "near_upper", "label": "接近箱体上沿"},
+            {"key": "near_lower", "label": "接近箱体下沿"},
+            {"key": "inside", "label": "箱体运行中"},
+        ],
+        "box_lookback_days": [30, 60, 120],
         "intraday_signal_support": intraday_monitor_support(
             getattr(request.app.state, "capabilities", None),
         ),

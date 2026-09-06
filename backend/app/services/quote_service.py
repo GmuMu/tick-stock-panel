@@ -45,7 +45,7 @@ from app.strategy.monitor import format_alert_quote
 SOURCE_LABELS = {
     "strategy": "策略", "signal": "信号", "price": "价格",
     "market": "异动", "ladder": "连板梯队", "sector": "板块",
-    "volume_delta": "放量", "abnormal": "异动", "resonance": "共振", "date": "日期提醒",
+    "volume_delta": "放量", "box": "箱体", "abnormal": "异动", "resonance": "共振", "date": "日期提醒",
 }
 
 
@@ -1215,6 +1215,9 @@ class QuoteService:
                                 "abnormal_window", "abnormal_value", "abnormal_threshold",
                                 "abnormal_closeness", "volume_delta", "volume_delta_span",
                                 "volume_delta_amount",
+                                "box_status", "box_status_label", "box_lookback_days",
+                                "box_upper", "box_lower", "box_middle", "box_position_pct",
+                                "box_width_pct", "box_volume_ratio", "box_volume_confirmed",
                                 "rolling_watch",
                                 "resonance", "alert_rule",
                             ):

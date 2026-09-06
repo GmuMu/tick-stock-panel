@@ -5,6 +5,7 @@ import { api, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { klineMinuteQueryOptions } from '@/lib/kline'
 import { EChartsIntraday } from '@/components/EChartsIntraday'
+import { useCapabilityMatrix } from '@/lib/useSharedQueries'
 
 interface Props {
   symbol: string
@@ -34,12 +35,15 @@ export function StockIntradayChart({
 }: Props) {
   const qc = useQueryClient()
   const [minuteDismissed, setMinuteDismissed] = useState(false)
+  const capabilityMatrix = useCapabilityMatrix()
+  const minuteRoute = capabilityMatrix.data?.capabilities.find(item => item.id === 'minute')
+  const minuteUnavailable = capabilityMatrix.isSuccess && minuteRoute?.usable !== true
 
   const minute = useQuery({
     // 轮询上下文 (个股详情) 传 live: 当日盘中后端直接实时拉取最新K,
     // 避免读到分钟增量落盘的上一轮本地分区; 历史日期后端自行忽略 live。
     ...klineMinuteQueryOptions(symbol, date ?? undefined, refetchIntervalMs != null),
-    enabled: !!symbol && !!date,
+    enabled: !!symbol && !!date && capabilityMatrix.isSuccess && !minuteUnavailable,
     refetchInterval: query => query.state.data?.source === 'none' ? false : refetchIntervalMs,
   })
 
@@ -68,6 +72,7 @@ export function StockIntradayChart({
 
   return (
     <div className={className} style={{ height, flexShrink: 0 }}>
+      {!capabilityMatrix.isSuccess && <div className="text-xs text-muted py-2">正在检查分钟数据能力…</div>}
       {minute.isLoading && <div className="text-xs text-muted py-2">分时加载中…</div>}
       {!minute.isLoading && minuteRows.length === 0 && (
         <>
@@ -75,6 +80,17 @@ export function StockIntradayChart({
             <div className="flex items-center justify-center h-full gap-2 text-xs text-accent">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               <span>正在获取分钟K数据…</span>
+            </div>
+          ) : minuteUnavailable ? (
+            <div className="flex flex-col items-center justify-center h-full gap-2 text-xs">
+              <span className="text-warning">当前没有可用的分钟 K 数据源，需要 TickFlow Pro+ 或可用的自定义分钟源</span>
+              <button
+                type="button"
+                onClick={() => { window.location.href = '/settings?tab=data-sources' }}
+                className="rounded-btn border border-warning/30 bg-warning/10 px-3 py-1.5 text-warning hover:bg-warning/15"
+              >
+                前往数据源配置
+              </button>
             </div>
           ) : isIndex ? (
             // 指数: 分钟K仅支持实时读取, 无落库获取入口

@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { Download, Loader2, RefreshCw } from 'lucide-react'
 import { api, type MinuteKlineSession } from '@/lib/api'
 import { klineMinuteQueryOptions, klineMinuteRangeQueryOptions } from '@/lib/kline'
 import { toast } from '@/components/Toast'
 import { EChartsMultiDayIntraday } from '@/components/EChartsMultiDayIntraday'
+import { useCapabilityMatrix } from '@/lib/useSharedQueries'
 
 interface Props {
   symbol: string
@@ -27,7 +29,11 @@ export function StockMultiDayIntradayChart({
   onPriceDoubleClick,
   priceLines,
 }: Props) {
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const capabilityMatrix = useCapabilityMatrix()
+  const minuteAvailable = capabilityMatrix.data?.capabilities.find(item => item.id === 'minute')?.usable !== false
+  const minuteCapabilityReady = capabilityMatrix.isSuccess
   const history = useQuery({
     ...klineMinuteRangeQueryOptions(symbol, days),
     enabled: !!symbol,
@@ -35,7 +41,7 @@ export function StockMultiDayIntradayChart({
   const latest = useQuery({
     // live: 当日盘中直接实时拉取, 不被分钟增量落盘的本地分区(≥60s一轮)拖慢
     ...klineMinuteQueryOptions(symbol, undefined, true),
-    enabled: !!symbol,
+    enabled: !!symbol && minuteCapabilityReady && minuteAvailable,
     refetchInterval: refetchIntervalMs,
   })
 
@@ -88,14 +94,21 @@ export function StockMultiDayIntradayChart({
   const autoSyncRef = useRef<string | null>(null)
   useEffect(() => {
     // 后端没运行时 history 会 error, 此时 missingDays 计算无意义, 跳过
-    if (history.error || history.isPlaceholderData || loading || isIndex || sessions.length >= days) return
+    if (
+      history.error
+      || history.isPlaceholderData
+      || loading
+      || isIndex
+      || !minuteAvailable
+      || sessions.length >= days
+    ) return
     if (syncMinute.isPending) return
 
     const key = `${symbol}:${days}`
     if (autoSyncRef.current === key) return  // 本组合已触发过
     autoSyncRef.current = key
     syncMinute.mutate()
-  }, [symbol, days, sessions.length, loading, isIndex, history.error, history.isPlaceholderData, syncMinute.isPending])
+  }, [symbol, days, sessions.length, loading, isIndex, minuteAvailable, history.error, history.isPlaceholderData, syncMinute.isPending])
 
   const chartHeight = Math.max(260, height - (showCoverage || syncMinute.isPending ? 32 : 0))
 
@@ -104,6 +117,15 @@ export function StockMultiDayIntradayChart({
       <div className="flex items-center justify-center gap-2 text-xs text-muted" style={{ height }}>
         <Loader2 className="h-4 w-4 animate-spin text-accent" />
         正在加载近 {days} 日分时…
+      </div>
+    )
+  }
+
+  if (!minuteCapabilityReady) {
+    return (
+      <div className="flex items-center justify-center gap-2 text-xs text-muted" style={{ height }}>
+        <Loader2 className="h-4 w-4 animate-spin text-accent" />
+        正在检查分钟数据能力…
       </div>
     )
   }
@@ -127,7 +149,20 @@ export function StockMultiDayIntradayChart({
   if (sessions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 text-xs" style={{ height }}>
-        {syncMinute.isPending ? (
+        {!minuteAvailable ? (
+          <>
+            <span className="text-warning">
+              当前没有可用的分钟 K 数据源，需要 TickFlow Pro+ 或可用的自定义分钟源
+            </span>
+            <button
+              type="button"
+              onClick={() => navigate('/settings?tab=data-sources')}
+              className="inline-flex items-center gap-1.5 rounded-btn border border-warning/30 bg-warning/10 px-3 py-1.5 text-warning hover:bg-warning/15"
+            >
+              前往数据源配置
+            </button>
+          </>
+        ) : syncMinute.isPending ? (
           <>
             <Loader2 className="h-5 w-5 animate-spin text-accent" />
             <span className="text-secondary">正在获取近 {days} 日分钟 K…</span>

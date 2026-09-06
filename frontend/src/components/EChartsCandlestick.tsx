@@ -53,6 +53,15 @@ export interface ChartPriceLine {
   end?: string
 }
 
+export interface ChartBoxSeriesPoint {
+  date: string
+  upper: number | null
+  lower: number | null
+  middle: number | null
+  status?: string
+  volumeConfirmed?: boolean
+}
+
 export interface StockInfo {
   name?: string
   total_shares?: number
@@ -324,6 +333,7 @@ interface Props {
   markers?: ChartMarker[]
   ranges?: ChartRange[]
   priceLines?: ChartPriceLine[]
+  boxSeries?: ChartBoxSeriesPoint[]
   height?: number
   showMA?: boolean
   showInfoBar?: boolean
@@ -467,6 +477,7 @@ function buildOption(
   markers: ChartMarker[] | undefined,
   ranges: ChartRange[] | undefined,
   priceLines: ChartPriceLine[] | undefined,
+  boxSeries: ChartBoxSeriesPoint[] | undefined,
   showMA: boolean,
   compact: boolean,
   activeIndicators: string[],
@@ -593,7 +604,7 @@ function buildOption(
   })
   xAxisIndices.push(0)
 
-  const markAreaData = (ranges ?? [])
+  const markAreaData: any[] = (ranges ?? [])
     .filter(r => dateIndexMap.has(r.start) && dateIndexMap.has(r.end))
     .map(r => ([
       {
@@ -616,6 +627,35 @@ function buildOption(
       },
       { xAxis: r.end },
     ]))
+
+  const boxByDate = new Map((boxSeries ?? []).map(point => [point.date.slice(0, 10), point]))
+  const boxPoints = (boxSeries ?? []).filter(point =>
+    dateIndexMap.has(point.date.slice(0, 10))
+    && Number.isFinite(point.upper)
+    && Number.isFinite(point.lower)
+    && Number.isFinite(point.middle),
+  )
+  if (boxPoints.length >= 2) {
+    const first = boxPoints[0]
+    const last = boxPoints[boxPoints.length - 1]
+    markAreaData.push([
+      {
+        name: '箱体区域',
+        xAxis: first.date.slice(0, 10),
+        yAxis: first.lower as number,
+        itemStyle: { color: 'rgba(59,130,246,0.055)' },
+        label: {
+          show: true,
+          formatter: '箱体区域',
+          position: 'insideTop',
+          color: 'rgba(96,165,250,0.85)',
+          fontSize: 9,
+          fontFamily: 'JetBrains Mono, monospace',
+        },
+      },
+      { xAxis: last.date.slice(0, 10), yAxis: last.upper as number },
+    ])
+  }
 
   const markLineData: any[] = (priceLines ?? [])
     .filter(line => Number.isFinite(line.value))
@@ -679,6 +719,33 @@ function buildOption(
     markArea: markAreaData.length > 0 ? { silent: true, data: markAreaData } : undefined,
     markLine: markLineData.length > 0 ? { silent: true, symbol: 'none', data: markLineData, animation: false } : undefined,
   })
+
+  if (boxPoints.length > 0) {
+    const buildBoxLine = (
+      key: 'upper' | 'lower' | 'middle',
+      color: string,
+      name: string,
+      type: 'solid' | 'dashed' = 'solid',
+    ) => ({
+      name,
+      type: 'line',
+      data: dates.map(date => {
+        const point = boxByDate.get(date)
+        const value = point?.[key]
+        return value != null && Number.isFinite(value) ? value : '-'
+      }),
+      smooth: false,
+      symbol: 'none',
+      animation: false,
+      silent: true,
+      lineStyle: { width: key === 'middle' ? 1 : 1.25, color, type },
+      itemStyle: { color },
+      z: 4,
+    })
+    series.push(buildBoxLine('upper', '#F59E0B', '箱体上沿', 'dashed'))
+    series.push(buildBoxLine('lower', '#38BDF8', '箱体下沿', 'dashed'))
+    series.push(buildBoxLine('middle', '#A78BFA', '箱体中轴'))
+  }
 
   if (hasMA) {
     const maLine = (key: keyof OHLC, color: string, name: string) => ({
@@ -804,6 +871,7 @@ export function EChartsCandlestick({
   markers,
   ranges,
   priceLines,
+  boxSeries,
   height = 480,
   showMA = true,
   showInfoBar = true,
@@ -1156,6 +1224,7 @@ export function EChartsCandlestick({
       showMarkersProp ? markers : undefined,
       ranges,
       priceLines,
+      boxSeries,
       showMA, compactRef.current,
       activeIndicators, chartHeight,
       infoIdxRef.current,
@@ -1178,7 +1247,7 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
+  }, [data, markers, ranges, priceLines, boxSeries, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {

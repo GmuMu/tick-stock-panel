@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, BarChart3, Building2, ChartNoAxesCombined, Check, ChevronDown, ChevronUp, Eraser, Layers3, ListPlus, Plus, RadioTower, Save, Search, Siren, Tags, TrendingUp, Waypoints, X } from 'lucide-react'
+import { Activity, BarChart3, Box as BoxIcon, Building2, ChartNoAxesCombined, Check, ChevronDown, ChevronUp, Eraser, Layers3, ListPlus, Plus, RadioTower, Save, Search, Siren, Tags, TrendingUp, Waypoints, X } from 'lucide-react'
 import { api, genRuleId, type MonitorRule, type MonitorCondition, type SectorKind, type SectorMonitorTarget, type StrategyNotifyEvent } from '@/lib/api'
 import { DEFAULT_STRATEGY_NOTIFY_EVENTS, LEGACY_STRATEGY_NOTIFY_EVENTS, STRATEGY_NOTIFY_EVENT_OPTIONS } from '@/lib/strategyMonitorEvents'
 import { QK } from '@/lib/queryKeys'
@@ -23,7 +23,7 @@ interface Props {
 }
 
 const TYPE_DEFAULT_NAME: Record<string, string> = {
-  signal: '信号监控', resonance: '多信号共振', price: '价格监控', market: '市场异动监控', strategy: '策略监控', sector: '板块监控', abnormal: '异动监控', volume_delta: '轮询放量监控',
+  signal: '信号监控', resonance: '多信号共振', price: '价格监控', market: '市场异动监控', strategy: '策略监控', sector: '板块监控', abnormal: '异动监控', volume_delta: '轮询放量监控', box: '箱体监控',
 }
 
 const TYPE_ICONS = {
@@ -35,6 +35,7 @@ const TYPE_ICONS = {
   sector: Layers3,
   abnormal: Siren,
   volume_delta: BarChart3,
+  box: BoxIcon,
 }
 
 const SECTOR_KIND_OPTIONS: Array<{ key: SectorKind; label: string; icon: typeof ChartNoAxesCombined }> = [
@@ -79,6 +80,9 @@ const emptyRule = (preset?: Partial<MonitorRule>): MonitorRule => ({
   severity: 'info',
   message: '',
   threshold_volume: 9000,
+  box_statuses: ['breakout_up'],
+  box_lookback_days: 60,
+  box_require_volume_confirmation: false,
   ...preset,
 })
 
@@ -231,6 +235,14 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         } else if (!Number.isFinite(d.threshold_volume) || (d.threshold_volume ?? 0) < 1) {
           throw new Error('单轮放量阈值必须是 ≥1 的手数')
         }
+      } else if (d.type === 'box') {
+        delete d.score_min
+        delete d.score_max
+        delete d.notify_events
+        d.conditions = []
+        d.asset_type = 'stock'
+        if (!d.box_statuses?.length) throw new Error('至少选择一个箱体状态')
+        if (![30, 60, 120].includes(d.box_lookback_days ?? 60)) throw new Error('箱体周期必须是 30、60 或 120 日')
       } else if (d.type === 'resonance') {
         delete d.score_min
         delete d.score_max
@@ -634,7 +646,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                     ...d,
                     type,
                     // 轮询放量依赖全市场股票快照, 仅支持个股
-                    asset_type: type === 'volume_delta' ? 'stock' : d.asset_type,
+                    asset_type: type === 'volume_delta' || type === 'box' ? 'stock' : d.asset_type,
                     notify_events: type === 'strategy'
                       ? [...(d.notify_events ?? DEFAULT_STRATEGY_NOTIFY_EVENTS)]
                       : undefined,
@@ -945,6 +957,85 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           <div className="rounded-btn bg-base px-3 py-2 text-[10px] leading-relaxed text-muted">
             按交易所异动规则口径 (3日±20%/30%… 10日+100%、30日+200% 等按板块) 计算
             个股涨跌幅偏离值的接近度, 上穿阈值时告警; 冷却期内同一标的不重复提醒。
+          </div>
+        </div>
+      )}
+
+      {draft.type === 'box' && (
+        <div className="space-y-4 border-t border-border/60 pt-4">
+          <div className="rounded-btn border border-accent/20 bg-accent/5 px-3 py-2 text-[10px] leading-relaxed text-muted">
+            箱体边界使用当前周期之前的日 K 计算，盘中实时价格只负责判断当前状态。
+            规则命中后会沿用下方已选择的飞书/企业微信通知渠道。
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1.5">
+              <span className="text-[11px] text-muted">箱体周期</span>
+              <select
+                value={draft.box_lookback_days ?? 60}
+                onChange={event => setDraft(d => ({
+                  ...d,
+                  box_lookback_days: Number(event.target.value) as MonitorRule['box_lookback_days'],
+                }))}
+                className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground"
+              >
+                {(options.data?.box_lookback_days ?? [30, 60, 120]).map(days => (
+                  <option key={days} value={days}>{days} 日</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 self-end rounded-btn border border-border bg-base px-3 py-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!draft.box_require_volume_confirmation}
+                onChange={event => setDraft(d => ({
+                  ...d,
+                  box_require_volume_confirmation: event.target.checked,
+                }))}
+                className="h-3.5 w-3.5 accent-accent cursor-pointer"
+              />
+              <span className="text-[11px] text-foreground">向上突破必须放量确认</span>
+            </label>
+          </div>
+          <div className="space-y-1.5">
+            <span className="text-[11px] text-muted">监控状态</span>
+            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+              {(options.data?.box_statuses ?? [
+                { key: 'breakout_up', label: '向上突破' },
+                { key: 'breakout_down', label: '向下跌破' },
+                { key: 'near_upper', label: '接近上沿' },
+                { key: 'near_lower', label: '接近下沿' },
+                { key: 'inside', label: '箱体运行' },
+              ]).map(status => {
+                const selected = draft.box_statuses?.includes(status.key as NonNullable<MonitorRule['box_statuses']>[number]) ?? false
+                return (
+                  <button
+                    key={status.key}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => setDraft(d => {
+                      const current = d.box_statuses ?? []
+                      const key = status.key as NonNullable<MonitorRule['box_statuses']>[number]
+                      return {
+                        ...d,
+                        box_statuses: selected
+                          ? current.filter(item => item !== key)
+                          : [...current, key],
+                      }
+                    })}
+                    className={`h-9 rounded-btn border px-2 text-[10px] font-medium transition-colors cursor-pointer ${
+                      selected
+                        ? 'border-accent/40 bg-accent/10 text-accent'
+                        : 'border-border bg-base text-secondary hover:border-accent/25 hover:text-foreground'
+                    }`}
+                  >
+                    {status.label}
+                  </button>
+                )
+              })}
+            </div>
+            {(draft.box_statuses?.length ?? 0) === 0 && (
+              <span className="block text-[10px] text-danger">请至少选择一个箱体状态。</span>
+            )}
           </div>
         </div>
       )}
@@ -1326,7 +1417,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       )}
 
       {/* 触发条件 (非 strategy) */}
-      {draft.type !== 'strategy' && draft.type !== 'sector' && draft.type !== 'abnormal' && draft.type !== 'volume_delta' && draft.type !== 'resonance' && (
+      {draft.type !== 'strategy' && draft.type !== 'sector' && draft.type !== 'abnormal' && draft.type !== 'volume_delta' && draft.type !== 'box' && draft.type !== 'resonance' && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-[11px] text-muted">触发条件</span>

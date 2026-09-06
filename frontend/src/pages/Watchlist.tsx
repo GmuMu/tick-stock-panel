@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Rows3, BarChart3, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw, FileUp, FolderOpen, FolderMinus, FolderPlus } from 'lucide-react'
+import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Rows3, BarChart3, Box, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw, FileUp, FolderOpen, FolderMinus, FolderPlus } from 'lucide-react'
 import { api, type KlineRow, type MinuteKlineRow, type WatchlistGroup, type WatchlistGroupColor } from '@/lib/api'
 import { fetchMinuteBatchIncremental } from '@/lib/minuteBatchIncremental'
 import { QK } from '@/lib/queryKeys'
@@ -28,6 +28,7 @@ import {
 } from '@/components/WatchlistGroups'
 import { WatchlistGroupCards } from '@/components/WatchlistGroupCards'
 import { WatchlistGroupStatsBar } from '@/components/WatchlistGroupStatsBar'
+import { WatchlistBoxSummary } from '@/components/WatchlistBoxSummary'
 import { ExtensionSlot } from '@/extensions/ExtensionSlot'
 
 // 分时列开放排序 (StockDataTable 实例级白名单; 表头眼睛/刷新按钮已 stopPropagation)
@@ -665,6 +666,7 @@ export function Watchlist() {
   const [groupCardsOpen, setGroupCardsOpen] = useState(false)
   // 分组统计条: 顶部图形化分组涨跌概览, 会话内开关, 不影响个股视图设置
   const [groupStatsOpen, setGroupStatsOpen] = useState(false)
+  const [boxOpen, setBoxOpen] = useState(false)
   const [dailyKChartVisible, setDailyKChartVisible] = useState(() => {
     return storage.watchlistCandle.get(true)
   })
@@ -1060,6 +1062,10 @@ export function Watchlist() {
   const listEntries = list.data?.symbols ?? []
   const allSymbols = listEntries.map(s => s.symbol)
   const rows = enriched.data?.rows ?? []
+  const namesBySymbol = useMemo(
+    () => Object.fromEntries(rows.map((row: any) => [row.symbol, row.rt_name ?? row.name ?? ''])),
+    [rows],
+  )
   const groupBySymbol = useMemo(
     () => new Map(listEntries.map(entry => [entry.symbol, entry.group_ids ?? []])),
     [listEntries],
@@ -1457,6 +1463,20 @@ export function Watchlist() {
             >
               <BarChart3 className="h-4 w-4" />
             </button>
+            {/* 自选股箱体观察 */}
+            <button
+              onClick={() => setBoxOpen(open => !open)}
+              aria-pressed={boxOpen}
+              className={`inline-flex items-center justify-center h-8 w-8 rounded-btn transition-colors duration-150 ease-smooth ${
+                boxOpen
+                  ? 'bg-accent/15 text-accent hover:bg-accent/25'
+                  : 'bg-elevated text-secondary hover:bg-elevated/80 hover:text-foreground'
+              }`}
+              title={boxOpen ? '收起箱体观察' : '自选股箱体观察'}
+              aria-label={boxOpen ? '收起箱体观察' : '自选股箱体观察'}
+            >
+              <Box className="h-4 w-4" />
+            </button>
             <div className="w-px h-5 bg-border" />
             {/* 自定义列 / 刷新 */}
             <button
@@ -1525,6 +1545,17 @@ export function Watchlist() {
         onClearGroup={groupId => clearGroup.mutateAsync(groupId).then(() => undefined)}
         onReorder={orderedIds => reorderGroup.mutateAsync(orderedIds).then(() => undefined)}
       />
+
+      {boxOpen && (
+        <WatchlistBoxSummary
+          symbols={sortedRows.map((row: any) => row.symbol)}
+          names={namesBySymbol}
+          onPreview={(symbol, name) => {
+            setPreviewSymbol(symbol)
+            setPreviewName(name)
+          }}
+        />
+      )}
 
       {/* 筛选栏 */}
       {filterOpen && (
