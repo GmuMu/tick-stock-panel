@@ -8,14 +8,14 @@
 
 ## 内置策略
 
-**31 个内置策略**,每个策略一个独立 Python 文件,基于矩阵或 Polars 表达式向量化实现(`backend/app/strategy/builtin/`):
+**32 个内置策略**,每个策略一个独立 Python 文件,基于矩阵或 Polars 表达式向量化实现(`backend/app/strategy/builtin/`):
 
 | 类型        | 代表策略                                                 |
 | :---------- | :------------------------------------------------------- |
 | 趋势 / 形态 | 趋势突破 · 均线多头 · MA 金叉 · MACD 金叉放量 · 布林突破 · 均线粘合突破 · 平台整理突破 · 放量创60日新高 |
 | 量价 / 涨停 | 量价齐升 · 高换手强势 · 连板股 · 断板反包 · 涨停动量 · 接近涨停 · 涨停基因活跃股 |
 | 反转 / 波动 | 超跌反弹 · 超卖反转 · 新低反转 · 低波动龙头 · 回踩 MA20 · 回踩支撑 · 强势开盘 · MACD 零下回升 · 长下影反击 · RSI 中轴回踩 |
-| Sequoia-X | TurtleTrade · MaVolume · HighTightFlag · LimitUpShakeout · UptrendLimitDown · RpsBreakout |
+| Sequoia-X | TurtleTrade · MaVolume · HighTightFlag · LimitUpShakeout · UptrendLimitDown · RpsBreakout · RpsMultiPeriod |
 
 内置目录 `backend/app/strategy/builtin/` 还包含一个仅供挖掘 worker 使用的受控因子排名研究模板。它不出现在普通选股列表，也不能通过普通策略 API 直接运行或保存 override；挖掘结果发布时会生成独立策略。详见 [因子与策略挖掘](./mining.md)。
 
@@ -85,3 +85,18 @@
 ## 新增内置策略(贡献者)
 
 如果你想为项目贡献一个内置策略:在 `backend/app/strategy/builtin/` 参照现有文件实现 `StrategyDef`,引擎会自动发现并加载。欢迎提交 PR。
+# 龙头战法 V1
+
+`leader_strategy_v1` 是一个保守的龙头候选策略，不把所有涨停股直接视为龙头。
+默认要求当前涨停且至少二连板，再从以下三项中至少满足两项：
+
+- 近 60 日涨停基因达到阈值；
+- 当日换手率达到阈值；
+- 当日量比达到阈值。
+
+同时要求当日涨幅达到最低门槛。`include_broken_board` 开启后，会额外识别
+“此前至少二连板、断板一天、当前重新涨停”的反包分支。该分支建议单独回测，
+不要与主接力池无条件混合。
+
+策略输出仍然只是研究/回测/监控信号；真实下单必须经过系统的交易预检、人工确认、
+双重配置和 `SafetyState` 激活。

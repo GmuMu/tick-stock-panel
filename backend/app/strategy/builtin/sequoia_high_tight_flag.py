@@ -19,7 +19,7 @@ META = {
     "tags": ["Sequoia-X", "旗形", "高位整理", "缩量"],
     "asset_types": ["stock", "etf"],
     "timeframes": ["1d"],
-    "scoring": {"momentum_60d": 0.6, "vol_ratio_5d": 0.4},
+    "scoring": {},
     "order_by": "score",
     "descending": True,
     "limit": 100,
@@ -70,9 +70,25 @@ class SequoiaHighTightFlagMatrixStrategy:
             & (low_10 >= high_40 * np.float32(0.8))
             & (market.volume < previous_volume_ma20 * np.float32(0.6))
         )
+        score = np.full(market.shape, np.nan, dtype=np.float32)
+        np.divide(
+            high_40 / low_40,
+            high_10 / low_10,
+            out=score,
+            where=(
+                np.isfinite(high_40)
+                & np.isfinite(low_40)
+                & np.isfinite(high_10)
+                & np.isfinite(low_10)
+                & (low_40 > 0)
+                & (low_10 > 0)
+            ),
+        )
+        score = np.nan_to_num(score, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
         return make_signal_matrix(
             market.shape,
             entry=entry.astype(np.uint8),
+            score=score,
             entry_signal_code=np.where(entry, 0, -1).astype(np.int16),
             entry_signal_ids=("signal_sequoia_high_tight_flag",),
         )

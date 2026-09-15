@@ -50,7 +50,8 @@ def test_all_builtin_strategies_use_matrix_backend_only():
     assert engine.load_errors() == []
     strategies = [engine.get(meta["id"]) for meta in engine.list_strategies()]
     matrix_strategies = [s for s in strategies if s.execution_backend == "matrix_native"]
-    assert len(matrix_strategies) == 31
+    # 新增龙头战法 V1 后, 内置矩阵策略数量为 33。
+    assert len(matrix_strategies) == 33
     assert all(s.matrix_strategy is not None for s in matrix_strategies)
     assert all(s.filter_fn is None for s in matrix_strategies)
     assert all(s.filter_history_fn is None for s in matrix_strategies)
@@ -97,7 +98,11 @@ def test_all_builtin_matrix_formulas_accept_base_market_matrix():
 
 def test_limit_up_strategies_are_stock_only():
     engine = _engine()
-    for sid in ("broken_board_recovery", "consecutive_limit_ups"):
+    for sid in (
+        "broken_board_recovery",
+        "consecutive_limit_ups",
+        "sequoia_turtle_trade",
+    ):
         assert engine.get(sid).meta["asset_types"] == ["stock"]
 
 

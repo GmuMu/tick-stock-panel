@@ -15,16 +15,22 @@ SEQUOIA_IDS = (
     "sequoia_limit_up_shakeout",
     "sequoia_uptrend_limit_down",
     "sequoia_rps_breakout",
+    "sequoia_rps_multi_period",
 )
 
 
 def _panel(series_by_symbol: dict[str, list[dict]]) -> pl.DataFrame:
     rows = []
     start = date(2024, 1, 1)
+    include_float_shares = any(
+        "float_shares" in values_for_day
+        for values in series_by_symbol.values()
+        for values_for_day in values
+    )
     for symbol, values in series_by_symbol.items():
         for offset, values_for_day in enumerate(values):
             close = float(values_for_day["close"])
-            rows.append({
+            row = {
                 "symbol": symbol,
                 "name": symbol,
                 "date": start + timedelta(days=offset),
@@ -34,7 +40,10 @@ def _panel(series_by_symbol: dict[str, list[dict]]) -> pl.DataFrame:
                 "close": close,
                 "volume": float(values_for_day.get("volume", 100.0)),
                 "amount": float(values_for_day.get("amount", 100000000.0)),
-            })
+            }
+            if include_float_shares:
+                row["float_shares"] = float(values_for_day.get("float_shares", np.nan))
+            rows.append(row)
     return pl.DataFrame(rows)
 
 
@@ -66,6 +75,31 @@ def test_turtle_trade_uses_previous_20_day_high_and_liquidity():
     })
     signals = _signals("sequoia_turtle_trade", _panel({"A": values}))
     assert signals.entry[:, 0].tolist() == [0] * 20 + [1]
+
+
+def test_turtle_trade_ranks_by_circulating_market_value():
+    base = [{"close": 10.0, "high": 10.2, "low": 9.8} for _ in range(20)]
+    leader = base + [{
+        "open": 10.5,
+        "close": 11.0,
+        "high": 11.2,
+        "low": 10.4,
+        "amount": 110000000.0,
+        "float_shares": 2_000_000_000.0,
+    }]
+    smaller = base + [{
+        "open": 10.5,
+        "close": 11.0,
+        "high": 11.2,
+        "low": 10.4,
+        "amount": 110000000.0,
+        "float_shares": 1_000_000_000.0,
+    }]
+    signals = _signals(
+        "sequoia_turtle_trade",
+        _panel({"LEADER": leader, "SMALLER": smaller}),
+    )
+    assert signals.score[-1, 0] > signals.score[-1, 1]
 
 
 def test_ma_volume_requires_cross_and_volume_expansion():
@@ -122,6 +156,44 @@ def test_rps_breakout_ranks_120_day_strength_cross_sectionally():
     assert signals.entry[119, :].tolist() == [0, 0]
     assert signals.entry[120, :].tolist() == [0, 1]
     np.testing.assert_allclose(signals.score[120, :], [50.0, 100.0])
+
+
+def test_rps_percentile_matches_reference_average_rank_for_ties():
+    series = {
+        "A": [{"close": 10.0 + offset * 0.1, "high": 10.5 + offset * 0.1} for offset in range(121)],
+        "B": [{"close": 10.0, "high": 10.5} for _ in range(121)],
+        "C": [{"close": 10.0, "high": 10.5} for _ in range(121)],
+    }
+    breakout = _signals("sequoia_rps_breakout", _panel(series))
+    multi_series = {
+        "A": [{"close": 10.0 + offset * 0.1, "high": 10.5 + offset * 0.1} for offset in range(251)],
+        "B": [{"close": 10.0, "high": 10.5} for _ in range(251)],
+        "C": [{"close": 10.0, "high": 10.5} for _ in range(251)],
+    }
+    multi = _signals(
+        "sequoia_rps_multi_period",
+        _panel(multi_series),
+    )
+    # pandas rank(pct=True) gives the tied bottom pair their average rank:
+    # 1.5 / 3 = 50%, while the leader receives 100%.
+    np.testing.assert_allclose(breakout.score[120, :], [100.0, 50.0, 50.0])
+    # The all-100 leader receives the reference project's -10 overheat penalty.
+    np.testing.assert_allclose(multi.score[-1, :], [90.0, 50.0, 50.0])
+
+
+def test_rps_multi_period_applies_reference_percentile_score():
+    leader = [
+        {"close": 10.0 + offset * 0.1, "high": 10.5 + offset * 0.1}
+        for offset in range(251)
+    ]
+    laggard = [{"close": 10.0, "high": 10.5} for _ in range(251)]
+    signals = _signals(
+        "sequoia_rps_multi_period",
+        _panel({"LEADER": leader, "LAGGARD": laggard}),
+    )
+    assert signals.entry[-1, :].tolist() == [1, 1]
+    # Matrix assets are sorted lexicographically: LAGGARD, then LEADER.
+    np.testing.assert_allclose(signals.score[-1, :], [50.0, 90.0])
 
 
 def test_sequoia_strategies_fail_closed_when_history_is_insufficient():

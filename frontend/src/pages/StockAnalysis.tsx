@@ -8,7 +8,8 @@ import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { LastStockChip } from '@/components/LastStockChip'
 import { AnalysisKChart, type PriceLevel, type LevelType } from '@/components/stock-analysis/AnalysisKChart'
 import { PriceAlertDialog } from '@/components/stock-analysis/PriceAlertDialog'
-import { api } from '@/lib/api'
+import { StockBoxAnalysis } from '@/components/StockBoxAnalysis'
+import { api, type StockChanAnalysis } from '@/lib/api'
 import { useLastStock } from '@/lib/useLastStock'
 import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
@@ -189,6 +190,13 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
     staleTime: 60_000,
   })
 
+  const chanQ = useQuery({
+    queryKey: ['stock-chan', symbol, 250, 3, '1d,1w,1M'],
+    queryFn: () => api.stockAnalysisChan(symbol, 250, 3, '1d,1w,1M'),
+    enabled: !!symbol,
+    staleTime: 60_000,
+  })
+
   if (kline.isLoading) {
     return <div className="flex items-center justify-center py-20"><Loader2 className="h-5 w-5 animate-spin text-muted" /></div>
   }
@@ -240,9 +248,13 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
           levels={levels}
           series={levelsQ.data?.series}
           seriesDates={levelsQ.data?.dates}
+          chan={chanQ.data as StockChanAnalysis | undefined}
           defaultLevelTypes={['sr', 'pivot', 'keltner_s']}
-          height={480}
+           height={760}
         />
+      </div>
+      <div className="px-3 pb-3">
+        <StockBoxAnalysis symbol={symbol} />
       </div>
     </div>
   )

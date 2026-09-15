@@ -37,7 +37,8 @@ META = {
             "step": 0.01,
         },
     ],
-    "scoring": {"momentum_120d": 1.0},
+    # The strategy score is the cross-sectional RPS percentile emitted below.
+    "scoring": {},
     "order_by": "score",
     "descending": True,
     "limit": 100,
@@ -79,6 +80,8 @@ class SequoiaRpsBreakoutMatrixStrategy:
             score=np.nan_to_num(
                 rps * np.float32(100.0),
                 nan=np.float32(0.0),
+                posinf=np.float32(0.0),
+                neginf=np.float32(0.0),
             ).astype(np.float32),
             entry_signal_code=np.where(entry, 0, -1).astype(np.int16),
             entry_signal_ids=("signal_sequoia_rps_breakout",),
@@ -93,10 +96,20 @@ def _cross_sectional_percentile(values: np.ndarray) -> np.ndarray:
         asset_ids = np.flatnonzero(np.isfinite(source[time_id]))
         if asset_ids.size == 0:
             continue
-        order = np.argsort(source[time_id, asset_ids], kind="stable")
-        result[time_id, asset_ids[order]] = (
-            np.arange(1, asset_ids.size + 1, dtype=np.float32) / asset_ids.size
+        values_for_date = source[time_id, asset_ids]
+        order = np.argsort(values_for_date, kind="stable")
+        sorted_values = values_for_date[order]
+        _, first_positions, counts = np.unique(
+            sorted_values,
+            return_index=True,
+            return_counts=True,
         )
+        average_ranks = (
+            first_positions.astype(np.float32)
+            + (counts.astype(np.float32) + np.float32(1.0)) / np.float32(2.0)
+        ) / np.float32(asset_ids.size)
+        rank_by_sorted_position = np.repeat(average_ranks, counts)
+        result[time_id, asset_ids[order]] = rank_by_sorted_position
     return result
 
 

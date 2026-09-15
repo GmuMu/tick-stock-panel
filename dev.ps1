@@ -76,8 +76,68 @@ function Require-Cmd($cmd, $hint) {
     }
 }
 
-Require-Cmd 'uv'   'powershell -c "irm https://astral.sh/uv/install.ps1 | iex"   OR   winget install --id=astral-sh.uv'
-Require-Cmd 'pnpm' 'npm i -g pnpm   OR   corepack enable; corepack prepare pnpm@9 --activate'
+# uv installed by the official Windows installer is commonly placed here,
+# but that directory is not always inherited by a process started via a .bat
+# double-click.
+foreach ($localBin in @(
+    (Join-Path $HOME '.local\bin'),
+    (Join-Path $HOME '.cargo\bin'),
+    (Join-Path $env:APPDATA 'npm'),
+    (Join-Path $env:LOCALAPPDATA 'pnpm'),
+    (Join-Path $env:ProgramFiles 'nodejs'),
+    (Join-Path $env:LOCALAPPDATA 'Programs\nodejs'),
+    'D:\DevelopmentTool\nodejs20'
+)) {
+    if (Test-Path $localBin) {
+        $env:Path = "$localBin;$env:Path"
+    }
+}
+
+# Vite 5 requires Node.js 18 or newer. Fail early with a useful message
+# instead of letting the frontend process disappear with a syntax error.
+$NodeCommand = Get-Command 'node' -ErrorAction SilentlyContinue
+if (-not $NodeCommand) {
+    Log-Err 'Node.js not found'
+    Write-Host '       install Node.js 20 LTS or newer, then rerun start.bat'
+    exit 1
+}
+$NodeVersion = (& node --version 2>$null).Trim()
+if ($NodeVersion -match '^v(\d+)' -and [int]$Matches[1] -lt 18) {
+    Log-Err "Node.js $NodeVersion is too old for Vite 5"
+    Write-Host '       install Node.js 20 LTS or newer, then rerun start.bat'
+    exit 1
+}
+
+$FrontendNodeModules = Join-Path $FrontendDir 'node_modules'
+$FrontendViteCommand = Join-Path $FrontendNodeModules '.bin\vite.cmd'
+$FrontendVitePackage = Join-Path $FrontendNodeModules 'vite'
+$NeedFrontendInstall = -not (Test-Path $FrontendNodeModules) -or
+    (-not (Test-Path $FrontendViteCommand) -and -not (Test-Path $FrontendVitePackage))
+
+$PnpmCommand = $null
+$PnpmPrefix = ''
+if (Get-Command 'pnpm' -ErrorAction SilentlyContinue) {
+    $PnpmCommand = 'pnpm'
+} elseif (Get-Command 'corepack' -ErrorAction SilentlyContinue) {
+    # Node.js distributions with Corepack can run the project's declared
+    # package manager without requiring a global pnpm PATH entry.
+    $PnpmCommand = 'corepack'
+    $PnpmPrefix = 'pnpm'
+    Log-Warn 'pnpm not found on PATH; using corepack pnpm'
+} elseif (Get-Command 'npx' -ErrorAction SilentlyContinue) {
+    # Final fallback for machines with npm but without a global pnpm or
+    # Corepack. npx will download the pinned package manager on first use.
+    $PnpmCommand = 'npx'
+    $PnpmPrefix = '--yes|pnpm@9.10.0'
+    Log-Warn 'pnpm and corepack not found; using npx pnpm@9.10.0'
+} else {
+    if ($NeedFrontendInstall) {
+        Log-Err 'pnpm, corepack and npx are unavailable'
+        Write-Host '       install pnpm (npm i -g pnpm), then rerun this script'
+        exit 1
+    }
+    Log-Warn 'pnpm not found; using existing frontend dependencies'
+}
 
 # ===== 2. Port check - kill anything listening on the target ports =====
 function Free-Port($name, $port) {
@@ -153,7 +213,10 @@ if (-not [string]::IsNullOrWhiteSpace($BackendExtras)) {
     }
 }
 
-if (-not (Test-Path (Join-Path $BackendDir '.venv')) -or $BackendExtraArgs.Count) {
+$BackendVenv = Join-Path $BackendDir '.venv'
+$NeedBackendSync = -not (Test-Path $BackendVenv) -or $BackendExtraArgs.Count
+if ($NeedBackendSync) {
+    Require-Cmd 'uv' 'powershell -c "irm https://astral.sh/uv/install.ps1 | iex"   OR   winget install --id=astral-sh.uv'
     if ($BackendExtraArgs.Count) {
         Log-Info "syncing Python deps with extras: $BackendExtras"
     } else {
@@ -165,12 +228,29 @@ if (-not (Test-Path (Join-Path $BackendDir '.venv')) -or $BackendExtraArgs.Count
     Log-Ok 'backend deps installed'
 }
 
-if (-not (Test-Path (Join-Path $FrontendDir 'node_modules'))) {
-    Log-Info 'first run - installing Node deps...'
+if ($NeedFrontendInstall) {
+    if (Test-Path $FrontendNodeModules) {
+        Log-Warn 'frontend dependencies are incomplete; repairing Node deps...'
+    } else {
+        Log-Info 'first run - installing Node deps...'
+    }
     Push-Location $FrontendDir
-    try { & pnpm install } finally { Pop-Location }
+    try {
+        $pnpmArgs = if ($PnpmPrefix) {
+            @($PnpmPrefix -split '\|' | Where-Object { $_ })
+        } else { @() }
+        # Hoisted links are more reliable on Windows when the repository was
+        # previously installed from a non-interactive shell.
+        & $PnpmCommand @pnpmArgs install --frozen-lockfile --node-linker=hoisted --config.confirmModulesPurge=false
+    } finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) { Log-Err 'pnpm install failed'; exit 1 }
     Log-Ok 'frontend deps installed'
+}
+
+if (-not (Test-Path $FrontendViteCommand) -and -not (Test-Path $FrontendVitePackage)) {
+    Log-Err 'frontend dependency repair completed, but Vite is still unavailable'
+    Write-Host '       remove frontend\node_modules and rerun start.bat'
+    exit 1
 }
 
 # ===== 4. Banner (ASCII so it renders on any codepage) =====
@@ -214,7 +294,14 @@ $frontendJob = Start-Job -Name 'frontend' -ScriptBlock {
     Set-Location $dir
     $env:BACKEND_HOST = $bindAddress
     $env:BACKEND_PORT = [string]$backendPort
-    & pnpm dev --host $bindAddress --port $port 2>&1
+    # Call the local Vite shim directly. This avoids pnpm trying to manage the
+    # packageManager field again in a non-interactive launcher window.
+    $viteCommand = Join-Path $dir 'node_modules\.bin\vite.cmd'
+    if (-not (Test-Path $viteCommand)) {
+        Write-Error 'frontend Vite executable is missing after dependency setup'
+        exit 1
+    }
+    & $viteCommand --host $bindAddress --port $port 2>&1
 } -ArgumentList $frontendPidFile, $FrontendDir, $BindAddress, $BackendPort, $FrontendPort
 
 # Wait up to 5 seconds for the PID files to materialise

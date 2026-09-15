@@ -4,6 +4,7 @@
 
 端点:
   GET  /levels?symbol=         11 类关键价位(图表 markLine 数据源)
+  GET  /chan?symbol=           缠论分型/笔/线段/中枢/买卖点结构
   POST /analyze                AI 流式四维分析(NDJSON)
   GET  /reports                历史报告列表
   POST /reports                保存一条报告
@@ -29,6 +30,7 @@ from app.indicators.levels import (
 )
 from app.services import stock_reports
 from app.services.box_analysis import analyze_box, analyze_box_batch
+from app.services.chan_analysis import analyze_chan
 from app.services.stock_analyzer import analyze_stock_stream
 
 logger = logging.getLogger(__name__)
@@ -54,7 +56,7 @@ def _to_float_list(series: pl.Series) -> list:
 def _build_series(df: pl.DataFrame) -> dict:
     """提取带状指标(布林带 / Keltner通道 / ATR止损)的每日时间序列。
 
-    这些指标的本质是"每日一条线",随 MA/ATR/σ 漂移,画成曲线才能体现通道形态。
+    这些指标的本质是"每日一条线",随 MA/ATR/波动率漂移,画成曲线才能体现通道形态。
     其余固定价位(枢轴/前高前低等)不在此,仍用水平 markLine。
 
     返回结构(每个 value 都是按日期对齐的数组):
@@ -100,7 +102,7 @@ def _build_series(df: pl.DataFrame) -> dict:
         if ma120 is not None:
             out["keltner_l"] = _channel(ma120, 3.0)
 
-        # ATR 止损/止盈: close ± 2×ATR(跟随行情漂移的动态止损线)
+        # ATR 止损/止盈: close +/- 2 x ATR(跟随行情漂移的动态止损线)
         out["atr"] = {
             "stop_loss": _to_float_list(close - 2 * atr),
             "take_profit": _to_float_list(close + 2 * atr),
@@ -177,6 +179,33 @@ def get_box_analysis(
     start = end - timedelta(days=lookback * 3)
     df = repo.get_daily_asset(repo.resolve_asset_type(symbol), symbol, start, end)
     return analyze_box(df, symbol=symbol, lookback=lookback, recent=recent)
+
+
+@router.get("/chan")
+def get_chan_analysis(
+    request: Request,
+    symbol: str = Query(..., description="标的代码,如 000001.SZ"),
+    days: int = Query(250, ge=60, le=500, description="分析日K数量"),
+    min_bars: int = Query(3, ge=3, le=10, description="成笔最少合并K线数"),
+    timeframes: str = Query("1d,1w,1M", description="缠论级别,逗号分隔:1d,1w,1M"),
+):
+    """返回多级别缠论结构、区间套和严格 CBSP 买卖点。"""
+    if not symbol:
+        raise HTTPException(400, "symbol 不能为空")
+
+    repo = request.app.state.repo
+    end = date.today()
+    start = end - timedelta(days=days * 3)
+    df = repo.get_daily_asset(repo.resolve_asset_type(symbol), symbol, start, end)
+    requested_timeframes = tuple(
+        dict.fromkeys(item.strip() for item in timeframes.split(",") if item.strip())
+    )
+    return analyze_chan(
+        df,
+        symbol=symbol,
+        min_bars=min_bars,
+        timeframes=requested_timeframes or ("1d",),
+    )
 
 
 class BoxBatchRequest(BaseModel):

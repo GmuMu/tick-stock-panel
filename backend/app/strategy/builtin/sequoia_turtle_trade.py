@@ -15,7 +15,8 @@ META = {
     "name": "Sequoia TurtleTrade",
     "description": "收盘价突破前20日最高价, 且成交额充足、收阳并高于昨日收盘价",
     "tags": ["Sequoia-X", "海龟", "突破", "量价"],
-    "asset_types": ["stock", "etf"],
+    # Circulating market-cap ranking requires the stock instrument dimension.
+    "asset_types": ["stock"],
     "timeframes": ["1d"],
     "params": [
         {
@@ -37,7 +38,9 @@ META = {
             "step": 10000000.0,
         },
     ],
-    "scoring": {"momentum_20d": 0.6, "amount_ratio_5d": 0.4},
+    # The reference implementation ranks candidates by circulating market
+    # value, not by a generic momentum/amount composite.
+    "scoring": {},
     "order_by": "score",
     "descending": True,
     "limit": 100,
@@ -52,7 +55,7 @@ MAX_HOLD_DAYS = 20
 
 class SequoiaTurtleTradeMatrixStrategy:
     def required_fields(self) -> frozenset[str]:
-        return frozenset({"open", "high", "close", "volume", "amount"})
+        return frozenset({"open", "high", "close", "volume", "amount", "float_shares"})
 
     def required_warmup_bars(self, params: dict) -> int:
         return max(5, int(params.get("breakout_window", 20)))
@@ -78,9 +81,19 @@ class SequoiaTurtleTradeMatrixStrategy:
             & (market.close > market.open)
             & (market.close > previous_close)
         )
+        float_shares = market.fields.get("float_shares")
+        if float_shares is not None:
+            score = (market.close * float_shares).astype(np.float32, copy=False)
+        else:
+            # Historical unit tests and imported panels may not carry the
+            # instrument dimension table. Amount is only a deterministic
+            # ranking fallback; the signal conditions remain unchanged.
+            score = np.array(amount, dtype=np.float32, copy=True)
+        score = np.nan_to_num(score, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
         return make_signal_matrix(
             market.shape,
             entry=entry.astype(np.uint8),
+            score=score,
             entry_signal_code=np.where(entry, 0, -1).astype(np.int16),
             entry_signal_ids=("signal_sequoia_turtle_breakout",),
         )

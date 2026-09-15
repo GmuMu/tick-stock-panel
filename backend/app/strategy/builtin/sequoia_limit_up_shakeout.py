@@ -36,7 +36,7 @@ META = {
             "step": 0.1,
         },
     ],
-    "scoring": {"momentum_20d": 0.6, "vol_ratio_5d": 0.4},
+    "scoring": {},
     "order_by": "score",
     "descending": True,
     "limit": 100,
@@ -80,9 +80,32 @@ class SequoiaLimitUpShakeoutMatrixStrategy:
             & (market.volume > previous_volume * float(params.get("volume_multiple", 2.0)))
             & (market.low >= previous_close)
         )
+        drop_pct = np.full(market.shape, np.nan, dtype=np.float32)
+        np.divide(
+            previous_close - market.close,
+            previous_close,
+            out=drop_pct,
+            where=np.isfinite(previous_close) & (previous_close > 0),
+        )
+        volume_ratio = np.full(market.shape, np.nan, dtype=np.float32)
+        np.divide(
+            market.volume,
+            previous_volume,
+            out=volume_ratio,
+            where=np.isfinite(market.volume) & np.isfinite(previous_volume) & (previous_volume > 0),
+        )
+        score = np.full(market.shape, np.nan, dtype=np.float32)
+        np.divide(
+            volume_ratio,
+            np.maximum(drop_pct, np.float32(0.001)),
+            out=score,
+            where=np.isfinite(volume_ratio) & np.isfinite(drop_pct),
+        )
+        score = np.nan_to_num(score, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
         return make_signal_matrix(
             market.shape,
             entry=entry.astype(np.uint8),
+            score=score,
             entry_signal_code=np.where(entry, 0, -1).astype(np.int16),
             entry_signal_ids=("signal_sequoia_limit_up_shakeout",),
         )

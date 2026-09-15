@@ -18,7 +18,10 @@ META = {
     "tags": ["Sequoia-X", "均线", "放量", "金叉"],
     "asset_types": ["stock", "etf"],
     "timeframes": ["1d"],
-    "scoring": {"change_pct": 0.5, "vol_ratio_5d": 0.5},
+    # Sequoia-X ranks by today's volume / today's 20-day volume mean.
+    # Keep the score emitted by the matrix strategy instead of applying the
+    # platform's generic cross-sectional scoring formula.
+    "scoring": {},
     "order_by": "score",
     "descending": True,
     "limit": 100,
@@ -59,9 +62,18 @@ class SequoiaMaVolumeMatrixStrategy:
             & (ma5 > ma20)
             & (market.volume > volume_ma20 * np.float32(1.5))
         )
+        score = np.full(market.shape, np.nan, dtype=np.float32)
+        np.divide(
+            market.volume,
+            volume_ma20,
+            out=score,
+            where=np.isfinite(market.volume) & np.isfinite(volume_ma20) & (volume_ma20 > 0),
+        )
+        score = np.nan_to_num(score, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
         return make_signal_matrix(
             market.shape,
             entry=entry.astype(np.uint8),
+            score=score,
             entry_signal_code=np.where(entry, 0, -1).astype(np.int16),
             entry_signal_ids=("signal_sequoia_ma_volume_cross",),
         )

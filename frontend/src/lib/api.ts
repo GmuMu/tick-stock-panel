@@ -236,6 +236,203 @@ export interface StockBoxBatchResponse {
   elapsed_ms: number
 }
 
+export interface StockChanFractal {
+  date: string
+  price: number
+  type: 'top' | 'bottom'
+  label: string
+  confirmed: boolean
+}
+
+export interface StockChanBi {
+  index: number
+  start_date: string
+  end_date: string
+  direction: 'up' | 'down'
+  start_price: number
+  end_price: number
+  high: number
+  low: number
+  change_pct: number | null
+  confirmed: boolean
+}
+
+export interface StockChanSegment {
+  index: number
+  start_date: string
+  end_date: string
+  direction: 'up' | 'down'
+  start_price?: number
+  end_price?: number
+  high: number
+  low: number
+  confirmed: boolean
+}
+
+export interface StockChanZone {
+  index: number
+  start_date: string
+  end_date: string
+  upper: number
+  lower: number
+  middle: number
+  bars: number
+  confirmed: boolean
+}
+
+export interface StockChanPoint {
+  date: string
+  price: number
+  side: 'buy' | 'sell'
+  type: 'B1' | 'B2' | 'B3' | 'S1' | 'S2' | 'S3'
+  label: string
+  reason: string
+  volume_ratio?: number | null
+  basis?: string
+  level?: string
+  zone_index?: number
+  confirmed: boolean
+}
+
+export interface StockChanSignal {
+  date: string
+  price: number
+  type: string
+  label: string
+  side: 'buy' | 'sell'
+  reason?: string
+  level?: number | null
+  dif?: number | null
+  dea?: number | null
+  confirmed: boolean
+}
+
+export interface StockChanAnalysis {
+  symbol: string
+  as_of: string | null
+  bars: number
+  merged_bar_count: number
+  min_bars: number
+  merged_bars: Array<{
+    start_date: string
+    end_date: string
+    high: number
+    low: number
+  }>
+  fractals: StockChanFractal[]
+  bis: StockChanBi[]
+  segments: StockChanSegment[]
+  zones: StockChanZone[]
+  points: StockChanPoint[]
+  cbsp_points?: StockChanPoint[]
+  eigen: Array<{
+    index: number
+    start_date: string
+    end_date: string
+    high: number
+    low: number
+    direction: 'up' | 'down'
+    overlap: boolean
+    gap: boolean
+    confirmed: boolean
+  }>
+  trendlines: Array<{
+    type: 'resistance' | 'support'
+    label: string
+    start_date: string
+    end_date: string
+    start_price: number
+    end_price: number
+    slope: number
+    confirmed: boolean
+  }>
+  moving_averages: Record<string, (number | null)[]>
+  macd: {
+    fast_period?: number
+    slow_period?: number
+    signal_period?: number
+    dif: (number | null)[]
+    dea: (number | null)[]
+    hist: (number | null)[]
+    crosses: StockChanSignal[]
+  }
+  rsi: {
+    period: number
+    overbought: number
+    oversold: number
+    midline: number
+    values: (number | null)[]
+    signals: StockChanSignal[]
+  }
+  kdj: {
+    period: number
+    smooth_k: number
+    smooth_d: number
+    k: (number | null)[]
+    d: (number | null)[]
+    j: (number | null)[]
+    signals: StockChanSignal[]
+  }
+  demark: {
+    setup: number[]
+    countdown: number[]
+    tdst_resistance: (number | null)[]
+    tdst_support: (number | null)[]
+    signals: StockChanSignal[]
+  }
+  channel: {
+    period: number
+    upper: (number | null)[]
+    lower: (number | null)[]
+    breakouts: StockChanSignal[]
+  }
+  divergences: StockChanSignal[]
+  segment_signals: StockChanSignal[]
+  segment_zones: Array<{
+    index: number
+    start_date: string
+    end_date: string
+    upper: number
+    lower: number
+    middle: number
+    segments: number
+    confirmed: boolean
+  }>
+  timeframes?: string[]
+  multi_level?: Record<string, StockChanAnalysis>
+  interval_nesting?: Array<{
+    date: string
+    price: number
+    side: 'buy' | 'sell'
+    type: string
+    label: string
+    child_type: string
+    child_timeframe: string
+    parent_timeframe: string
+    parent_zone_index: number
+    parent_zone_upper: number
+    parent_zone_lower: number
+    direction_alignment: boolean
+    confirmed: boolean
+  }>
+  signals: StockChanSignal[]
+  current: {
+    date: string
+    close: number | null
+    zone: StockChanZone | null
+    last_bi: StockChanBi | null
+    last_point: StockChanPoint | null
+    last_cbsp?: StockChanPoint | null
+    last_signal?: StockChanSignal | null
+    macd?: {
+      dif: number | null
+      dea: number | null
+      hist: number | null
+    }
+  } | null
+  message: string
+}
+
 export interface AiStockReport {
   id: string
   symbol: string
@@ -3505,6 +3702,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ symbols, lookback, recent }),
     }),
+
+  stockAnalysisChan: (symbol: string, days = 250, minBars = 3, timeframes = '1d,1w,1M') =>
+    request<StockChanAnalysis>(
+      `/api/stock-analysis/chan?symbol=${encodeURIComponent(symbol)}&days=${days}&min_bars=${minBars}&timeframes=${encodeURIComponent(timeframes)}`,
+    ),
 
   stockAnalysisReportsList: () =>
     request<{ reports: AiStockReport[] }>('/api/stock-analysis/reports'),

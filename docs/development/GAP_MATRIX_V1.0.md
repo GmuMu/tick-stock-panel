@@ -40,7 +40,7 @@
 | TASK-0202 | DONE | `data_providers/financial.py` 定义五张财务表 canonical schema；扶摇、TickFlow 和自定义 HTTP 财务源在 `financial_sync` 统一归一化，保留公告日、source 和扩展字段；28 个财务回归通过 | 进入 `TASK-0203`，集中实现 Provider health/retry/fallback |
 | TASK-0203 | DONE | `data_providers/health.py` 提供线程安全 ProviderHealthRegistry、RetryPolicy、指数退避、错误脱敏和 fallback 记录；kline、minute、financial、quote 服务统一接入；`/api/settings/provider-health` 暴露状态与 error rate；83 个定向回归通过 | 进入 `TASK-0204`，建立跨 Provider golden baseline |
 | TASK-0204 | DONE | `docs/data/DATA_GOLDEN_BASELINE.md` 与 `backend/tests/fixtures/provider_golden/market.json` 固化跨 Provider 日K、分钟、实时、除权和财务报告期口径；`tests/test_provider_golden.py` 及 132 个相关回归通过 | 进入 `TASK-0301`，抽出可版本化 IndicatorSpec |
-| TASK-0205 | DONE | `backend/app/strategy/builtin/sequoia_*.py` 接入 Sequoia-X 的 6 个日线矩阵策略；`tests/test_sequoia_x_strategies.py` 覆盖注册、公式触发、历史不足和 RPS 横截面排名；普通矩阵策略由 25 个增至 31 个 | `PrivatePlacement` 依赖公司行为数据集，保留为数据缺口；随后回到 `TASK-0301` |
+| TASK-0205 | DONE | `backend/app/strategy/builtin/sequoia_*.py` 接入并按新版 Sequoia-X 对齐 7 个日线矩阵策略；`tests/test_sequoia_x_strategies.py` 覆盖注册、公式触发、排序分数、历史不足和 RPS 横截面排名；普通矩阵策略由 25 个增至 32 个 | `PrivatePlacement` 依赖公司行为数据集，保留为数据缺口；随后回到 `TASK-0301` |
 
 ## Phase 3：指标规范与增量一致性
 
