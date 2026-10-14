@@ -76,12 +76,12 @@ const CURVE_DEFS: { alignedKey: string; group: LevelType; endLabel: string; colo
   { alignedKey: 'atr_tp',         group: 'atr_stop',  endLabel: 'ATR上轨', color: '#F87171', dashed: true },
 ]
 
-type ChanLayer = 'fractal' | 'bi' | 'segment' | 'zone' | 'point' | 'cbsp' | 'eigen' | 'trendline' | 'ma' | 'channel' | 'signal' | 'segmentSignal' | 'segzs' | 'multilevel' | 'nesting' | 'demark' | 'macd' | 'rsi' | 'kdj'
+type ChanLayer = 'fractal' | 'bi' | 'segment' | 'zone' | 'point' | 'cbsp' | 'eigen' | 'trendline' | 'ma' | 'channel' | 'signal' | 'segmentSignal' | 'segzs' | 'multilevel' | 'nesting' | 'demark' | 'macd' | 'rsi' | 'kdj' | 'wyckoff'
 
 const CHAN_LAYER_GROUPS: { key: ChanLayer; label: string; color: string }[] = [
   { key: 'fractal',   label: '分型',     color: '#F59E0B' },
-  { key: 'bi',        label: '笔',       color: '#38BDF8' },
   { key: 'segment',   label: '线段',     color: '#A78BFA' },
+  { key: 'bi',        label: '笔',       color: '#38BDF8' },
   { key: 'zone',      label: '中枢',     color: '#0EA5E9' },
   { key: 'point',     label: 'B/S点',    color: '#22C55E' },
   { key: 'cbsp',      label: '严格CBSP', color: '#22D3EE' },
@@ -98,6 +98,7 @@ const CHAN_LAYER_GROUPS: { key: ChanLayer; label: string; color: string }[] = [
   { key: 'macd',      label: 'MACD',     color: '#60A5FA' },
   { key: 'rsi',       label: 'RSI',      color: '#F59E0B' },
   { key: 'kdj',       label: 'KDJ',      color: '#A78BFA' },
+  { key: 'wyckoff',   label: '威科夫',   color: '#34D399' },
 ]
 
 type ExplanationSelection =
@@ -200,6 +201,10 @@ const CHAN_LAYER_EXPLANATIONS: Record<ChanLayer, { summary: string; usage: strin
     summary: '根据相邻线段终点关系生成的线段级突破和转折提示。',
     usage: '它比笔级信号更慢、更偏趋势确认，适合和线段方向及线段中枢一起判断。',
   },
+  wyckoff: {
+    summary: '根据日线 OHLCV 规则识别威科夫候选事件：SC、Spring、SOS、UTAD 和 SOW。',
+    usage: '这是量价启发式标注，不等同完整阶段判读；优先观察 Spring 后的放量 SOS，事件需要结合更长周期结构复核。',
+  },
   segzs: {
     summary: '由三条线段重叠计算的线段级中枢，级别高于笔级中枢。',
     usage: '用于观察更大级别的震荡区间和离开方向，数据不足时不会强行绘制。',
@@ -275,7 +280,7 @@ export function AnalysisKChart({
   series,
   seriesDates,
   chan,
-  defaultChanLayers = CHAN_LAYER_GROUPS.map(item => item.key),
+  defaultChanLayers = ['fractal', 'segment', 'cbsp', 'trendline', 'channel', 'signal', 'segmentSignal'],
   defaultLevelTypes = ['sr', 'pivot', 'keltner_s'],
   markers,
   ranges,
@@ -297,6 +302,7 @@ export function AnalysisKChart({
   /** 双向联动高亮: hover 价位标签 ↔ hover 下方文字行。值为 levelKey, null=无高亮 */
   const [hoveredKey, setHoveredKey] = useState<string | null>(null)
   const [explanationSelection, setExplanationSelection] = useState<ExplanationSelection | null>(null)
+  const wyckoffEvents = useMemo(() => buildWyckoffEvents(rows), [rows])
 
   // 数据预处理 + 带状曲线序列对齐(后端 series 的日期范围可能与 rows 不同,需映射)
   const { dates, candle, vols, dateIndex, zoomStart, alignedSeries } = useMemo(() => {
@@ -456,6 +462,25 @@ export function AnalysisKChart({
             color: isBuy ? '#FDBA74' : '#FB923C',
             fontSize: 8,
             position: isBuy ? 'bottom' : 'top',
+          },
+        })
+      }
+      if (layerEnabled('wyckoff')) for (const event of wyckoffEvents) {
+        if (!dateIndex.has(event.date)) continue
+        const color = event.side === 'buy' ? '#34D399' : event.side === 'sell' ? '#FB7185' : '#FBBF24'
+        chanMarkPoints.push({
+          coord: [event.date, event.price],
+          symbol: event.side === 'buy' ? 'diamond' : event.side === 'sell' ? 'triangle' : 'circle',
+          symbolRotate: event.side === 'sell' ? 180 : 0,
+          symbolSize: event.type === 'SOS' || event.type === 'SOW' ? 15 : 12,
+          itemStyle: { color, borderColor: '#111827', borderWidth: 1 },
+          label: {
+            show: true,
+            formatter: event.type,
+            color,
+            fontSize: 8,
+            fontWeight: 'bold',
+            position: event.side === 'sell' ? 'top' : 'bottom',
           },
         })
       }
@@ -1213,6 +1238,8 @@ export function AnalysisKChart({
                         ? Object.values(chan.multi_level ?? {}).reduce((sum, item) => sum + item.zones.length, 0)
                         : layer.key === 'nesting'
                           ? (chan.interval_nesting?.length ?? 0)
+                          : layer.key === 'wyckoff'
+                            ? wyckoffEvents.length
                       : layer.key === 'demark'
                         ? (chan.demark?.signals?.length ?? 0)
                         : layer.key === 'rsi'
@@ -1249,6 +1276,7 @@ export function AnalysisKChart({
           selection={explanationSelection}
           levels={levels}
           chan={chan}
+          wyckoffEvents={wyckoffEvents}
           showChan={showChan}
           activeTypes={activeTypes}
           activeChanLayers={activeChanLayers}
@@ -1279,6 +1307,7 @@ function SignalExplanation({
   selection,
   levels,
   chan,
+  wyckoffEvents,
   showChan,
   activeTypes,
   activeChanLayers,
@@ -1287,6 +1316,7 @@ function SignalExplanation({
   selection: ExplanationSelection | null
   levels?: Record<LevelType, PriceLevel[]>
   chan: StockChanAnalysis
+  wyckoffEvents: WyckoffEvent[]
   showChan: boolean
   activeTypes: Set<LevelType>
   activeChanLayers: Set<ChanLayer>
@@ -1310,14 +1340,14 @@ function SignalExplanation({
     ? (levels?.[current.key] ?? []).length
     : current.key === 'all'
       ? chan.bis.length + chan.segments.length + chan.zones.length
-      : chanLayerCount(chan, current.key)
+      : chanLayerCount(chan, current.key, wyckoffEvents)
   const enabled = isLevel
     ? activeTypes.has(current.key)
     : current.key === 'all'
       ? showChan
       : showChan && activeChanLayers.has(current.key)
   const latestSignal = !isLevel && current.key !== 'all'
-    ? chanLayerLatestSignal(chan, current.key)
+    ? chanLayerLatestSignal(chan, current.key, wyckoffEvents)
     : current.key === 'all'
       ? chan.signals.at(-1) ?? null
       : null
@@ -1398,7 +1428,7 @@ function SignalExplanation({
   )
 }
 
-function chanLayerCount(chan: StockChanAnalysis, key: ChanLayer): number {
+function chanLayerCount(chan: StockChanAnalysis, key: ChanLayer, wyckoffEvents: WyckoffEvent[]): number {
   switch (key) {
     case 'fractal': return chan.fractals.length
     case 'bi': return chan.bis.length
@@ -1419,10 +1449,15 @@ function chanLayerCount(chan: StockChanAnalysis, key: ChanLayer): number {
     case 'macd': return chan.macd.crosses.length
     case 'rsi': return chan.rsi.signals.length
     case 'kdj': return chan.kdj.signals.length
+    case 'wyckoff': return wyckoffEvents.length
   }
 }
 
-function chanLayerLatestSignal(chan: StockChanAnalysis, key: ChanLayer): { date: string; label: string } | null {
+function chanLayerLatestSignal(
+  chan: StockChanAnalysis,
+  key: ChanLayer,
+  wyckoffEvents: WyckoffEvent[],
+): { date: string; label: string } | null {
   const signals = key === 'signal'
     ? chan.signals
       : key === 'segmentSignal'
@@ -1441,6 +1476,8 @@ function chanLayerLatestSignal(chan: StockChanAnalysis, key: ChanLayer): { date:
               ? chan.kdj.signals
               : key === 'channel'
                 ? chan.channel.breakouts
+                : key === 'wyckoff'
+                  ? wyckoffEvents
                 : key === 'point'
                   ? chan.points
                   : key === 'segment'
@@ -1871,6 +1908,78 @@ function recentVolumeRatio(rows: KlineRow[]): number | null {
   if (previous.length === 0) return null
   const average = previous.reduce((sum, value) => sum + value, 0) / previous.length
   return average > 0 ? latestVolume / average : null
+}
+
+interface WyckoffEvent {
+  date: string
+  price: number
+  side: 'buy' | 'sell' | 'neutral'
+  type: 'SC' | 'Spring' | 'SOS' | 'UTAD' | 'SOW'
+  label: string
+}
+
+function buildWyckoffEvents(rows: KlineRow[]): WyckoffEvent[] {
+  const events: WyckoffEvent[] = []
+  const window = 20
+
+  for (let index = window; index < rows.length; index += 1) {
+    const row = rows[index]
+    const history = rows.slice(index - window, index)
+    const high = finiteNumber(row.high)
+    const low = finiteNumber(row.low)
+    const open = finiteNumber(row.open)
+    const close = finiteNumber(row.close)
+    const volume = finiteNumber(row.volume)
+    const highs = history.map(item => finiteNumber(item.high)).filter((value): value is number => value != null)
+    const lows = history.map(item => finiteNumber(item.low)).filter((value): value is number => value != null)
+    const volumes = history.map(item => finiteNumber(item.volume)).filter((value): value is number => value != null)
+    if (
+      high == null || low == null || open == null || close == null || volume == null
+      || highs.length < window || lows.length < window || volumes.length < window
+    ) continue
+
+    const resistance = Math.max(...highs)
+    const support = Math.min(...lows)
+    const averageVolume = volumes.reduce((sum, value) => sum + value, 0) / volumes.length
+    const averageSpread = history.reduce((sum, item) => {
+      const itemHigh = finiteNumber(item.high)
+      const itemLow = finiteNumber(item.low)
+      return sum + (itemHigh != null && itemLow != null ? itemHigh - itemLow : 0)
+    }, 0) / window
+    const spread = high - low
+    const volumeRatio = averageVolume > 0 ? volume / averageVolume : 0
+    const closePosition = spread > 0 ? (close - low) / spread : 0.5
+    const add = (type: WyckoffEvent['type'], side: WyckoffEvent['side'], price: number) => {
+      events.push({ date: row.date, price, side, type, label: `${type} 威科夫候选事件` })
+    }
+
+    if (
+      close < open
+      && spread >= averageSpread * 1.5
+      && volumeRatio >= 1.8
+      && closePosition <= 0.35
+      && low <= support * 1.03
+    ) add('SC', 'neutral', low)
+
+    if (
+      low < support * 0.995
+      && close > support
+      && close > open
+      && volumeRatio <= 1.3
+    ) add('Spring', 'buy', low)
+
+    if (close > resistance && close > open && volumeRatio >= 1.3) {
+      add('SOS', 'buy', close)
+    }
+
+    if (high > resistance * 1.005 && close < resistance && volumeRatio >= 1.2) {
+      add('UTAD', 'sell', high)
+    }
+
+    if (close < support && volumeRatio >= 1.3) add('SOW', 'sell', close)
+  }
+
+  return events.slice(-80)
 }
 
 // ===== 工具:收集要画的水平价位线(按开启的组 + 档位 + 强度配色) =====

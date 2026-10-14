@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import polars as pl
 import pytest
 
-from app.services.eod_runner import run_eod_seeds
-from app.services.eod_seeds import EODSeedStore, EODSeedStoreError
 from app.api.strategy import (
     StrategyCodeSaveRequest,
+    StrategyCopyRequest,
     StrategyLifecycleRequest,
     StrategyRollbackRequest,
-    StrategyCopyRequest,
     _save_strategy_code,
     copy_strategy,
     get_strategy_lifecycle,
@@ -21,6 +19,8 @@ from app.api.strategy import (
     rollback_strategy,
     update_strategy_lifecycle,
 )
+from app.services.eod_runner import run_eod_seeds
+from app.services.eod_seeds import EODSeedStore, EODSeedStoreError
 from app.strategy.candidates import batch_from_result, candidate_id
 from app.strategy.engine import StrategyResult
 from app.strategy.lifecycle import StrategyLifecycleError, StrategyLifecycleStore
@@ -54,6 +54,20 @@ def test_candidate_batch_has_stable_rank_ids_and_provenance():
     )
     assert batch.candidates[0].signals == ("signal_buy",)
     assert batch.seed_id
+
+
+def test_candidate_batch_serializes_dates_in_rows_and_provenance(tmp_path):
+    result = _result()
+    result.rows[1]["trade_date"] = date(2026, 8, 28)
+    result.rows[1]["updated_at"] = datetime(2026, 8, 28, 15, 0, 0)
+    result.provenance["effective_date"] = date(2026, 8, 28)
+
+    batch = batch_from_result(result)
+    saved = EODSeedStore(tmp_path).put(batch)
+    candidate = next(row for row in saved["candidates"] if row["symbol"] == "000001.SZ")
+    assert candidate["row"]["trade_date"] == "2026-08-28"
+    assert candidate["row"]["updated_at"] == "2026-08-28T15:00:00"
+    assert saved["provenance"]["effective_date"] == "2026-08-28"
 
 
 def test_eod_seed_store_is_idempotent_and_conflict_safe(tmp_path):

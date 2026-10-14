@@ -8,13 +8,14 @@
 
 ## 内置策略
 
-**32 个内置策略**,每个策略一个独立 Python 文件,基于矩阵或 Polars 表达式向量化实现(`backend/app/strategy/builtin/`):
+**33 个内置策略**,每个策略一个独立 Python 文件,基于矩阵或 Polars 表达式向量化实现(`backend/app/strategy/builtin/`):
 
 | 类型        | 代表策略                                                 |
 | :---------- | :------------------------------------------------------- |
 | 趋势 / 形态 | 趋势突破 · 均线多头 · MA 金叉 · MACD 金叉放量 · 布林突破 · 均线粘合突破 · 平台整理突破 · 放量创60日新高 |
 | 量价 / 涨停 | 量价齐升 · 高换手强势 · 连板股 · 断板反包 · 涨停动量 · 接近涨停 · 涨停基因活跃股 |
 | 反转 / 波动 | 超跌反弹 · 超卖反转 · 新低反转 · 低波动龙头 · 回踩 MA20 · 回踩支撑 · 强势开盘 · MACD 零下回升 · 长下影反击 · RSI 中轴回踩 |
+| 结构 / 量价 | 龙头战法 V1 · 威科夫吸筹突破（区间蓄势、Spring 可选确认、SOS 放量突破） |
 | Sequoia-X | TurtleTrade · MaVolume · HighTightFlag · LimitUpShakeout · UptrendLimitDown · RpsBreakout · RpsMultiPeriod |
 
 内置目录 `backend/app/strategy/builtin/` 还包含一个仅供挖掘 worker 使用的受控因子排名研究模板。它不出现在普通选股列表，也不能通过普通策略 API 直接运行或保存 override；挖掘结果发布时会生成独立策略。详见 [因子与策略挖掘](./mining.md)。
@@ -85,6 +86,12 @@
 ## 新增内置策略(贡献者)
 
 如果你想为项目贡献一个内置策略:在 `backend/app/strategy/builtin/` 参照现有文件实现 `StrategyDef`,引擎会自动发现并加载。欢迎提交 PR。
+
+## 威科夫吸筹突破
+
+`wyckoff_accumulation` 在日线吸筹区间内寻找 SOS 放量突破，并以区间支撑失守作为退出信号。默认不强制要求 Spring；启用“要求近期出现Spring”后，只有回踩/刺破支撑后收回且量能未明显放大的 Spring，才会作为 SOS 的前置条件并提高候选评分。
+
+个股分析图表提供独立的威科夫图层，按日线 OHLCV 标注 SC、Spring、SOS、UTAD 和 SOW 候选事件。它们是规则化量价提示，不构成完整的威科夫阶段判读，也不等同真实主力资金流向；策略信号应先用历史数据回测，不直接作为自动下单指令。
 # 龙头战法 V1
 
 `leader_strategy_v1` 是一个保守的龙头候选策略，不把所有涨停股直接视为龙头。

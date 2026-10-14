@@ -8,15 +8,17 @@
 
 ## 🔍 选股引擎(Screener)
 
-**32 个内置策略**,每个策略一个独立 Python 文件,基于矩阵或 Polars 表达式向量化实现(`backend/app/strategy/builtin/`):
+**33 个内置策略**,每个策略一个独立 Python 文件,基于矩阵或 Polars 表达式向量化实现(`backend/app/strategy/builtin/`):
 
 | 类型        | 代表策略                                                 |
 | :---------- | :------------------------------------------------------- |
 | 趋势 / 形态 | 趋势突破 · 均线多头 · MA 金叉 · MACD 金叉放量 · 布林突破 |
 | 量价 / 涨停 | 量价齐升 · 高换手强势 · 连板股 · 断板反包 · 涨停动量     |
 | 反转 / 波动 | 超跌反弹 · 超卖反转 · 新低反转 · 低波动龙头 · 回踩 MA20  |
+| 结构 / 量价 | 威科夫吸筹突破（Spring / SOS）                            |
 | 龙头策略   | 龙头战法 V1：活跃股池 + 连板触发 + 量价确认，可选断板反包 |
 | 缠论分析   | 包含关系处理 · 分型 · 笔 · 线段/线段中枢 · 日/周/月多级别 · 区间套 · 严格 CBSP 买卖点 · MACD/RSI/KDJ · TD/Demark 9/13 · 背驰/通道信号 |
+| 个股图层   | 威科夫候选事件：SC · Spring · SOS · UTAD · SOW             |
 | Sequoia-X | TurtleTrade · MaVolume · HighTightFlag · LimitUpShakeout · UptrendLimitDown · RpsBreakout · RpsMultiPeriod |
 
 全 A 股一次扫表,Polars 毫秒级返回。选股页点策略卡片即可扫描,结果支持导出。**分钟策略**与日线策略共用同一个标的池,按策略声明的周期自动路由执行(分钟策略依赖数据页开启分钟数据落盘)。

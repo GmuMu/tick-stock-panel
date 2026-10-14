@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
+from datetime import date, datetime
 from typing import Any
 
 CANDIDATE_MODEL_VERSION = "1.0"
@@ -111,6 +113,19 @@ def batch_from_result(result: Any) -> StrategyCandidateBatch:
 
 def jsonable_batch(batch: StrategyCandidateBatch) -> dict[str, Any]:
     """Validate that the public candidate payload remains JSON-compatible."""
-    payload = batch.to_dict()
+    payload = _jsonable(batch.to_dict())
     json.dumps(payload, ensure_ascii=False, allow_nan=False)
     return payload
+
+
+def _jsonable(value: Any) -> Any:
+    """Normalize values emitted by Polars/Python rows before JSON persistence."""
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, set):
+        return [_jsonable(item) for item in sorted(value, key=str)]
+    return value
